@@ -11,23 +11,21 @@ import (
 )
 
 // Atlas は 5×5 × 6 状態 = 150 枚のスプライトシートを保持する。
-// スレッドセーフ。Load() で全シートを並列デコード、Get() で遅延ロード。
+// スレッドセーフ。LoadAll() で全シートを並列デコード、Get() で画像取得。
 type Atlas struct {
 	cfg    *Config
-	images [6][5][5]*ebiten.Image // 6 sheets × 5×5 grid
-	loaded [6]bool                 // 各シートのロード完了フラグ
+	images [6][5][5]*ebiten.Image // 6 sheets × 5×5 grid (固定長: Phase 1.4 で動的化)
+	loaded [6]bool                 // 各シートのロード完了フラグ（@todo Phase 1.4 lazy decode）
 
-	mu    sync.RWMutex
-	ready bool // 1 枚以上の画像がロードされたら true
+	mu      sync.RWMutex
+	ready   bool   // 1 枚以上の画像がロードされたら true
+	lastErr error  // 最後に発生したエラー（nil なら成功）
 }
 
 // NewAtlas は設定から新しい Atlas を作成する（まだロードしない）。
 func NewAtlas(cfg *Config) *Atlas {
 	return &Atlas{cfg: cfg}
 }
-
-// Config は元設定を返す。
-func (a *Atlas) Config() *Config { return a.cfg }
 
 // Ready は 1 枚以上の画像がロードされたら true を返す。
 func (a *Atlas) Ready() bool {
@@ -36,14 +34,21 @@ func (a *Atlas) Ready() bool {
 	return a.ready
 }
 
+// LastErr は最後に発生したエラーを返す。nil なら全画像ロード成功。
+func (a *Atlas) LastErr() error {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.lastErr
+}
+
 // LoadAll は全 150 画像を並列デコードする（goroutine fan-out、semaphore で 4 並行）。
 // Phase 1.3 では全画像を起動時にプリロード。Phase 1.4 で 1 シート + 隣接のみに変更予定。
 func (a *Atlas) LoadAll() error {
-	sheetNames := []string{"A", "B", "C", "D", "E", "F"}
+	sheetNames := a.cfg.SheetNames()
 	const concurrency = 4
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
-	errCh := make(chan error, 150)
+	errCh := make(chan error, len(sheetNames)*a.cfg.Rows*a.cfg.Cols)
 
 	for sheetIdx, name := range sheetNames {
 		for r := 0; r < a.cfg.Rows; r++ {
@@ -63,7 +68,7 @@ func (a *Atlas) LoadAll() error {
 	wg.Wait()
 	close(errCh)
 
-	// 最初のエラーを返す（全部失敗しても 1 つだけ報告）
+	// 最初のエラーを採用（1 つ報告すれば十分）
 	var firstErr error
 	for err := range errCh {
 		if firstErr == nil {
@@ -71,8 +76,10 @@ func (a *Atlas) LoadAll() error {
 		}
 	}
 
+	// ready は loadOne 内で画像成功時に true になる（上書きしない → フリッカ防止）
+	// lastErr だけ更新
 	a.mu.Lock()
-	a.ready = firstErr == nil
+	a.lastErr = firstErr
 	a.mu.Unlock()
 
 	return firstErr
@@ -80,7 +87,10 @@ func (a *Atlas) LoadAll() error {
 
 // loadOne は 1 枚の画像を読み込んで Atlas に格納する。
 func (a *Atlas) loadOne(sheetIdx, row, col int, sheet string) error {
-	path := a.cfg.PathFor(sheet, row, col)
+	path, err := a.cfg.PathFor(sheet, row, col)
+	if err != nil {
+		return fmt.Errorf("path for %s: %w", sheet, err)
+	}
 	img, err := loadImageFile(path)
 	if err != nil {
 		return fmt.Errorf("load %s: %w", path, err)
@@ -88,27 +98,34 @@ func (a *Atlas) loadOne(sheetIdx, row, col int, sheet string) error {
 	a.mu.Lock()
 	a.images[sheetIdx][row][col] = img
 	a.loaded[sheetIdx] = true
-	a.ready = true
+	a.ready = true // 1 枚でもロードできれば ready にする
 	a.mu.Unlock()
 	return nil
 }
 
-// Get は指定位置の画像を返す。ロードされていなければ nil を返す（遅延ロードは未実装）。
-func (a *Atlas) Get(sheetIdx, row, col int) *ebiten.Image {
+// Get は指定位置の画像を返す。
+//   - 第 2 戻り値: 範囲内なら true、範囲外なら false
+//   - 範囲内だが未ロード: (nil, true) （Phase 1.3 では全ロード済のため発生しない）
+func (a *Atlas) Get(sheetIdx, row, col int) (*ebiten.Image, bool) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return a.images[sheetIdx][row][col]
-}
-
-// SheetLoaded は指定シートのロード完了を返す。
-func (a *Atlas) SheetLoaded(sheetIdx int) bool {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.loaded[sheetIdx]
+	if sheetIdx < 0 || sheetIdx >= 6 || row < 0 || row >= a.cfg.Rows || col < 0 || col >= a.cfg.Cols {
+		return nil, false
+	}
+	return a.images[sheetIdx][row][col], true
 }
 
 // loadImageFile はファイルを開いて image.Decode → ebiten.Image 変換する。
+// 16 MB を超えるファイルはエラー（DoS 対策）。
 func loadImageFile(path string) (*ebiten.Image, error) {
+	const maxImageSize = 16 << 20 // 16 MB
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.Size() > maxImageSize {
+		return nil, fmt.Errorf("file too large: %d bytes (max %d)", info.Size(), maxImageSize)
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err

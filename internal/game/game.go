@@ -49,20 +49,27 @@ func (g *Game) Update() error {
 }
 
 // Draw は画面描画。Phase 1.3 では:
-//   - アトラス未準備: "Loading..." テキスト表示
+//   - アトラス未準備 & エラーなし: "Loading..." テキスト表示（半透明黒背景）
+//   - アトラス未準備 & エラーあり: エラーメッセージ表示（半透明赤背景）
 //   - 準備完了: デフォルトセル（Sheet A, r2c2 = 中央）を表示
 func (g *Game) Draw(screen *ebiten.Image) {
+	// アトラス未準備時の状態（Loading / Error）
 	if !g.atlas.Ready() {
-		// アトラス読み込み中
-		ebitenutil.DebugPrintAt(screen, "Loading...", 20, 20)
+		// ebitenutil.DebugPrint の白文字は透過背景で見えないため、背景を自前描画
+		if err := g.atlas.LastErr(); err != nil {
+			screen.Fill(color.RGBA{128, 0, 0, 200}) // 半透明赤
+			ebitenutil.DebugPrintAt(screen, "Load error: "+err.Error(), 20, 20)
+		} else {
+			screen.Fill(color.RGBA{0, 0, 0, 180}) // 半透明黒
+			ebitenutil.DebugPrintAt(screen, "Loading...", 20, 20)
+		}
 		return
 	}
 
 	// デフォルトセルを描画（Phase 1.3 では中央固定）
 	// Phase 1.5 で mouse follow に置換予定
-	img := g.atlas.Get(0, 2, 2) // Sheet A, row 2, col 2
-	if img == nil {
-		ebitenutil.DebugPrintAt(screen, "Atlas not ready", 20, 20)
+	img, ok := g.atlas.Get(0, 2, 2) // Sheet A, row 2, col 2
+	if !ok || img == nil {
 		return
 	}
 
@@ -82,6 +89,3 @@ func (g *Game) Layout(w, h int) (int, int) {
 
 // WindowTitle は Ebitengine の SetWindowTitle に渡す定数。
 func WindowTitle() string { return windowTitle }
-
-// BackgroundColor は未使用（透過背景のため）。将来の拡張用に color.RGBA ゼロ値を返す。
-func BackgroundColor() color.RGBA { return color.RGBA{} }
