@@ -27,8 +27,8 @@ type Game struct {
 }
 
 // New は新しい Game を作成する。
-func New(atlas *character.Atlas, mouse *mouse.Follower) *Game {
-	return &Game{atlas: atlas, mouse: mouse, firstUpdate: true}
+func New(atlas *character.Atlas, follower *mouse.Follower) *Game {
+	return &Game{atlas: atlas, mouse: follower, firstUpdate: true}
 }
 
 // Update は毎フレーム呼ばれる。

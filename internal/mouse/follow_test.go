@@ -13,22 +13,22 @@ func TestFollow_TargetClamp(t *testing.T) {
 
 	// マウスがウィンドウ右下に大きくはみ出し
 	f.Update(1000, 1000, 640, 480)
-	tx, ty := f.Target()
+	tx, ty := 	f.target()
 	if tx != 1 || ty != 1 {
 		t.Errorf("expected target clamped to (1, 1), got (%v, %v)", tx, ty)
 	}
 
 	// マウスが負の座標
 	f.Update(-100, -100, 640, 480)
-	tx, ty = f.Target()
+	tx, ty = 	f.target()
 	if tx != -1 || ty != -1 {
 		t.Errorf("expected target clamped to (-1, -1), got (%v, %v)", tx, ty)
 	}
 
 	// ウィンドウサイズ 0 → 何も更新しない
-	beforeX, beforeY := f.Target()
+	beforeX, beforeY := 	f.target()
 	f.Update(100, 100, 0, 0)
-	afterX, afterY := f.Target()
+	afterX, afterY := 	f.target()
 	if beforeX != afterX || beforeY != afterY {
 		t.Errorf("expected target unchanged when win size 0, got (%v, %v) → (%v, %v)",
 			beforeX, beforeY, afterX, afterY)
@@ -47,7 +47,7 @@ func TestFollow_SmoothingConverges(t *testing.T) {
 		f.Update(640, 240, 640, 480)
 	}
 
-	cx, cy := f.Current()
+	cx, cy := 	f.current()
 	if cx < 1-eps {
 		t.Errorf("expected cx ≈ 1, got %v", cx)
 	}
@@ -94,7 +94,7 @@ func TestFollow_NoResponsiveness(t *testing.T) {
 		f.Update(640, 240, 640, 480)
 	}
 
-	cx, cy := f.Current()
+	cx, cy := 	f.current()
 	if cx != 0 || cy != 0 {
 		t.Errorf("expected current unchanged at (0, 0), got (%v, %v)", cx, cy)
 	}

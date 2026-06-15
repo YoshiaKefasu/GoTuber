@@ -8,15 +8,15 @@ import (
 	"sync"
 
 	"github.com/hajimehoshi/ebiten/v2"
-	_ "golang.org/x/image/webp" // WebP 登録（init、Phase 1.3 拡張）
+	_ "golang.org/x/image/webp" // WebP 登録（init、Phase 1.4 で追加）
 )
 
 // Atlas は 5×5 × 6 状態 = 150 枚のスプライトシートを保持する。
 // スレッドセーフ。LoadAll() で全シートを並列デコード、Get() で画像取得。
 type Atlas struct {
 	cfg    *Config
-	images [6][5][5]*ebiten.Image // 6 sheets × 5×5 grid (固定長: Phase 1.4 で動的化)
-	loaded [6]bool                 // 各シートのロード完了フラグ（@todo Phase 1.4 lazy decode）
+	images [6][5][5]*ebiten.Image // 6 sheets × 5×5 grid (Phase 1.4 時点は固定長。動的化は別 Issue)
+	loaded [6]bool                 // 各シートのロード完了フラグ (@todo lazy decode: Phase 1.5 以降で再評価)
 
 	mu      sync.RWMutex
 	ready   bool   // 1 枚以上の画像がロードされたら true

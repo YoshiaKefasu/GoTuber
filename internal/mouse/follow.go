@@ -69,7 +69,7 @@ func (f *Follower) Update(mouseX, mouseY, winW, winH int) {
 //   - 戻り値: 0〜4
 func (f *Follower) Cell() (row, col int) {
 	c := int((f.currentX + 1) / 2 * 5)
-	r := 4 - int((f.currentY + 1) / 2 * 5) // Y 軸反転
+	r := 4 - int((f.currentY + 1) / 2 * 5) // Y 軸反転: マウス下=row 0、上=row 4 (tomari-guruguru 互換)
 	if c < 0 {
 		c = 0
 	}
@@ -85,12 +85,12 @@ func (f *Follower) Cell() (row, col int) {
 	return r, c
 }
 
-// Target は現在の target を返す（テスト・デバッグ用）。
-func (f *Follower) Target() (x, y float64) {
+// target は現在の target を返す（同 package のテストからのみ使用）。
+func (f *Follower) target() (x, y float64) {
 	return f.targetX, f.targetY
 }
 
-// Current は現在の current を返す（テスト・デバッグ用）。
-func (f *Follower) Current() (x, y float64) {
+// current は現在の current を返す（同 package のテストからのみ使用）。
+func (f *Follower) current() (x, y float64) {
 	return f.currentX, f.currentY
 }
