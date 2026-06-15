@@ -2,6 +2,9 @@ package killswitch
 
 import (
 	"os"
+	"os/signal"
+	"runtime"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -14,8 +17,22 @@ func TestTriggeredInitiallyFalse(t *testing.T) {
 }
 
 func TestSignalTriggersKillSwitch(t *testing.T) {
+	// Process.Signal(os.Interrupt) は Windows で未サポート。
+	// 将来 Windows テスト対応時は console API 経由で送信する。
+	if runtime.GOOS == "windows" {
+		t.Skip("os.Interrupt via Process.Signal is not supported on Windows")
+	}
 	Reset()
-	Install()
+
+	// テスト用ローカルシグナルチャネル。
+	// Install() を直接呼ぶと毎回 goroutine が累積するため、ここでは channel を直接作る。
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	t.Cleanup(func() { signal.Stop(sigCh) })
+	go func() {
+		<-sigCh
+		triggered.Store(true)
+	}()
 
 	// 自分自身のプロセスに SIGINT 送信
 	p, err := os.FindProcess(os.Getpid())

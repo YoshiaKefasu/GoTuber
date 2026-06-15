@@ -24,7 +24,8 @@ var (
 	triggered  atomic.Bool // 終了トリガが発火したら true
 )
 
-// Reset はテスト用に状態をクリアする。
+// Reset はテスト専用。テスト間で状態 (escPressed, triggered) をクリアする。
+// 本番コードから呼んではならない。
 func Reset() {
 	escPressed.Store(false)
 	triggered.Store(false)
@@ -41,9 +42,10 @@ func Install() {
 }
 
 // Tick は Ebitengine の Update() から毎フレーム呼ばれる。
-// Esc キーが押されたらフラグを立てる。
+// inpututil は main loop 外から呼ぶと unsafe なため、ここで同期的に Esc を検出する。
+// 他の goroutine から呼んではならない。
 func Tick() {
-	if !escPressed.Load() && inpututil.IsKeyJustPressed(ebiten.KeyEscape) {
+	if inpututil.IsKeyJustPressed(ebiten.KeyEscape) {
 		escPressed.Store(true)
 	}
 }

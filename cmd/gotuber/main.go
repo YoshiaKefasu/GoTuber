@@ -49,8 +49,9 @@ func main() {
 	ebiten.SetWindowSize(windowWidth, windowHeight)
 
 	// ゲームループ開始
-	if err := ebiten.RunGame(&Game{}); err != nil {
-		log.Printf("GoTuber terminated: %v", err)
-		os.Exit(0)
+	// ebiten.Termination は kill switch 発火時の正常終了として扱う（終了コード 0）
+	if err := ebiten.RunGame(&Game{}); err != nil && err != ebiten.Termination {
+		log.Printf("GoTuber terminated with error: %v", err)
+		os.Exit(1)
 	}
 }
