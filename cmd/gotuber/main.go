@@ -11,6 +11,7 @@ import (
 	"github.com/YoshiaKefasu/GoTuber/internal/character"
 	"github.com/YoshiaKefasu/GoTuber/internal/game"
 	"github.com/YoshiaKefasu/GoTuber/internal/killswitch"
+	"github.com/YoshiaKefasu/GoTuber/internal/mouse"
 	"github.com/hajimehoshi/ebiten/v2"
 )
 
@@ -53,7 +54,7 @@ func main() {
 		ScreenTransparent: true,
 	}
 
-	g := game.New(atlas)
+	g := game.New(atlas, mouse.NewFollower(0.3))
 
 	// ゲームループ
 	// ebiten.Termination は kill switch 発火時の正常終了として扱う（終了コード 0）

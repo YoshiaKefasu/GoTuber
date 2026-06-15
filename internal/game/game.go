@@ -7,6 +7,7 @@ import (
 
 	"github.com/YoshiaKefasu/GoTuber/internal/character"
 	"github.com/YoshiaKefasu/GoTuber/internal/killswitch"
+	"github.com/YoshiaKefasu/GoTuber/internal/mouse"
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 )
@@ -18,20 +19,21 @@ const (
 )
 
 // Game は Ebitengine のゲームロジック実装。
-// Phase 1.3: アトラス読み込み中表示 + 準備完了後のデフォルトセル描画。
+// Phase 1.5: アトラス描画 + マウス追従（Sheet A 固定、表情は Phase 1.6/1.7）
 type Game struct {
 	atlas       *character.Atlas
+	mouse       *mouse.Follower
 	firstUpdate bool // Update() 初回呼び出し検出用
 }
 
 // New は新しい Game を作成する。
-func New(atlas *character.Atlas) *Game {
-	return &Game{atlas: atlas, firstUpdate: true}
+func New(atlas *character.Atlas, mouse *mouse.Follower) *Game {
+	return &Game{atlas: atlas, mouse: mouse, firstUpdate: true}
 }
 
 // Update は毎フレーム呼ばれる。
 // 初回呼び出し時にクリックスルー + フローティングを有効化（Issue #3222 対策）。
-// その後 kill switch をチェックする。
+// その後マウス追従を更新し、kill switch をチェックする。
 func (g *Game) Update() error {
 	if g.firstUpdate {
 		g.firstUpdate = false
@@ -41,6 +43,10 @@ func (g *Game) Update() error {
 		ebiten.SetWindowFloating(true)
 	}
 
+	// マウス位置取得 → Follower 更新
+	mx, my := ebiten.CursorPosition()
+	g.mouse.Update(mx, my, windowWidth, windowHeight)
+
 	killswitch.Tick()
 	if killswitch.Triggered() {
 		return ebiten.Termination
@@ -48,10 +54,9 @@ func (g *Game) Update() error {
 	return nil
 }
 
-// Draw は画面描画。Phase 1.3 では:
-//   - アトラス未準備 & エラーなし: "Loading..." テキスト表示（半透明黒背景）
-//   - アトラス未準備 & エラーあり: エラーメッセージ表示（半透明赤背景）
-//   - 準備完了: デフォルトセル（Sheet A, r2c2 = 中央）を表示
+// Draw は画面描画。
+//   - アトラス未準備: "Loading..." / "Load error: ..." 表示
+//   - 準備完了: マウス位置で決定されるセル（Sheet A 固定）を描画
 func (g *Game) Draw(screen *ebiten.Image) {
 	// アトラス未準備時の状態（Loading / Error）
 	if !g.atlas.Ready() {
@@ -66,9 +71,10 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		return
 	}
 
-	// デフォルトセルを描画（Phase 1.3 では中央固定）
-	// Phase 1.5 で mouse follow に置換予定
-	img, ok := g.atlas.Get(0, 2, 2) // Sheet A, row 2, col 2
+	// マウス追従でセル取得
+	// Phase 1.5: Sheet A 固定（目開け + 口閉じ）。Phase 1.6/1.7 で表情切替追加。
+	row, col := g.mouse.Cell()
+	img, ok := g.atlas.Get(0, row, col)
 	if !ok || img == nil {
 		return
 	}
