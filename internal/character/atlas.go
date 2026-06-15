@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/hajimehoshi/ebiten/v2"
+	_ "golang.org/x/image/webp" // WebP 登録（init、Phase 1.3 拡張）
 )
 
 // Atlas は 5×5 × 6 状態 = 150 枚のスプライトシートを保持する。

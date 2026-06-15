@@ -92,6 +92,52 @@ func (c *Config) SheetNames() []string {
 	}
 }
 
+// Validate は設定の妥当性をフェイルファストで検証する。
+//   - base_path: 非空、`..` を含まない、存在するディレクトリ
+//   - ext: "png" または "webp"
+//   - 6 シートディレクトリ: 全て存在
+//   - 各シートの 25 枚画像: 全て存在
+func (c *Config) Validate() error {
+	if c.BasePath == "" {
+		return fmt.Errorf("empty base_path")
+	}
+	if c.Ext != "png" && c.Ext != "webp" {
+		return fmt.Errorf("invalid ext: %s (must be png or webp)", c.Ext)
+	}
+	cleaned := filepath.Clean(c.BasePath)
+	if strings.Contains(cleaned, "..") {
+		return fmt.Errorf("invalid base_path: %s (contains ..)", c.BasePath)
+	}
+	info, err := os.Stat(cleaned)
+	if err != nil {
+		return fmt.Errorf("base_path not accessible: %s (%w)", cleaned, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("base_path is not a directory: %s", cleaned)
+	}
+	sheetNames := c.SheetNames()
+	for _, name := range sheetNames {
+		if name == "" {
+			return fmt.Errorf("empty sheet name in config (check eyes_open/eyes_closed mapping)")
+		}
+		dir := filepath.Join(cleaned, name)
+		if _, err := os.Stat(dir); err != nil {
+			return fmt.Errorf("sheet directory missing: %s (%w)", dir, err)
+		}
+	}
+	for _, name := range sheetNames {
+		for r := 0; r < c.Rows; r++ {
+			for col := 0; col < c.Cols; col++ {
+				path := filepath.Join(cleaned, name, fmt.Sprintf("r%dc%d.%s", r, col, c.Ext))
+				if _, err := os.Stat(path); err != nil {
+					return fmt.Errorf("image missing: %s (%w)", path, err)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // PathFor はシート・行・列から画像ファイルパスを生成する。
 //   - 範囲外: error
 //   - base_path に `..` を含む: error (path traversal 防止)

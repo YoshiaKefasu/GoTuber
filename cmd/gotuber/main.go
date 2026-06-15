@@ -23,6 +23,12 @@ func main() {
 	}
 	log.Printf("loaded character: %s (base=%s, ext=%s)", cfg.Name, cfg.BasePath, cfg.Ext)
 
+	// フェイルファスト: 設定妥当性検証（base_path / ext / 6 sheets / 150 images）
+	if err := cfg.Validate(); err != nil {
+		log.Printf("invalid config: %v", err)
+		os.Exit(1)
+	}
+
 	// アトラス作成 + 非同期ロード
 	atlas := character.NewAtlas(cfg)
 	go func() {
