@@ -1,0 +1,44 @@
+# Build artifacts
+/bin/
+/gotuber
+/gotuber.exe
+/dist/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.prof
+*.cover
+
+# Go workspace files
+go.work
+go.work.sum
+
+# IDE / Editor
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local env / secrets
+.env
+.env.local
+*.local
+
+# Build cache
+/tmp/
+/.cache/
+
+# Generated / temp assets
+sheets/
+uploads/
+新キャラ資料/

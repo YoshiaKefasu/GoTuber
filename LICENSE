@@ -1,0 +1,37 @@
+MIT License
+
+Copyright (c) 2026 Yoshia Kefasu (GoTuber)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+## Third-party licenses
+
+This project uses the following open-source libraries. See
+[tools/LICENSE-third-party](tools/LICENSE-third-party) for the full list.
+
+- Ebitengine v2.9.9 — MIT (https://github.com/hajimehoshi/ebiten)
+- malgo v0.11.25 — Unlicense (https://github.com/gen2brain/malgo)
+- ebitenui v0.7.3 — MIT (https://github.com/ebitenui/ebitenui)
+- golang.org/x/image v0.42.0 — BSD-3-Clause (https://pkg.go.dev/golang.org/x/image)
+- gocv v0.43.0 — Apache-2.0 (Phase 2+ only)
+
+The Python tool `tools/slice_character_sheets.py` is MIT-licensed and
+inherited from [tomari-guruguru](https://github.com/rotejin/tomari-guruguru).
