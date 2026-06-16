@@ -196,15 +196,16 @@ AI画像生成時に発生する色ムラが目立たなくなり綺麗な仕上
 [6] アップスケール手順 (2x 2 回 → 4500×4500)
 
     入力 PNG (例: 1254×1254) → 2x → 2x → リサイズ 4500×4500 の手順。
+    実際の計測では RTX 2060 + 6 枚入力で **162.8 秒** (1 枚あたり 26〜29 秒)。
 
     ## 必要なもの
 
     1. **realesrgan-ncnn-vulkan バイナリ** (PATH に通す or スクリプトと同階層)
        入手: https://github.com/xinntao/Real-ESRGAN/releases
-            (例: realesrgan-ncnn-vulkan-v0.2.0.0-windows.zip)
+       (v0.2.5.0 の Windows portable: `realesrgan-ncnn-vulkan-20220424-windows.zip`)
     2. **NCNN モデルファイル** (.param + .bin)
        入手: https://openmodeldb.info
-            (例: `sudo_RealESRGAN2x_Dropout` を DL → zip 展開)
+       (例: `sudo_RealESRGAN2x_Dropout` を DL → zip 展開)
     3. **Python 3.8+ + Pillow**: `pip install Pillow`
 
     ## ディレクトリ準備
@@ -224,13 +225,42 @@ AI画像生成時に発生する色ムラが目立たなくなり綺麗な仕上
     ## 実行
 
         # Windows (PowerShell)
-        $env:PATH = "$PWD\tools;$env:PATH"
-        python tools\upscale_2x.py マイ入力/ マイ出力_4500/ --model-dir マイモデル/ --target 4500
+        # 1. バイナリ取得 (初回のみ)
+        $tempRoot = "A:\Temp\opencode\realesrgan-ncnn"
+        $zip = Join-Path $tempRoot "realesrgan-ncnn-vulkan-20220424-windows.zip"
+        if (!(Test-Path -LiteralPath $zip)) {
+          New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
+          Invoke-WebRequest -Uri "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-windows.zip" -OutFile $zip
+        }
+        Expand-Archive -LiteralPath $zip -DestinationPath $tempRoot -Force
+
+        # 2. 実行 (RTX 2060 の場合: --device-id 0)
+        $env:PATH = "$tempRoot;" + $env:PATH
+        python tools\upscale_2x.py マイ入力/ マイ出力_4500/ --model-dir マイモデル/ --target 4500 --device-id 0
 
         # Linux / macOS / WSL
-        PATH="$PWD/tools:$PATH" python tools/upscale_2x.py マイ入力/ マイ出力_4500/ --model-dir マイモデル/ --target 4500
+        TEMP=$(mktemp -d)
+        wget -O "$TEMP/realesrgan-ncnn.zip" https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-ubuntu.zip
+        unzip "$TEMP/realesrgan-ncnn.zip" -d "$TEMP"
+        PATH="$TEMP:$PATH" python tools/upscale_2x.py マイ入力/ マイ出力_4500/ --model-dir マイモデル/ --target 4500 --device-id 0
 
     出力: `マイ出力_4500/メイン（目を開いた）_4500.png` (4500×4500 RGBA PNG)
+
+    ## GPU device-id の見つけ方
+
+    NCNN の `-g` インデックスは **Windows Task Manager の GPU 番号と一致しない** ことが多い
+    (例: RTX 2060 が `-g 0`, Intel UHD が `-g 1`)。次のコマンドで確認:
+
+        # 1 枚のダミーで -g 0, 1, 2... を順に試す (例: -v で vendor 名が出る)
+        realesrgan-ncnn-vulkan -i probe.png -o probe.png -n <model> -m マイモデル/ -s 2 -f png -g 0 -v
+        # 出力に "NVIDIA GeForce RTX 2060" があれば -g 0 が正解
+
+    実機確認例:
+
+        [0 NVIDIA GeForce RTX 2060]  queueC=2[8]  ...
+        [1 Intel(R) UHD Graphics 630]  queueC=0[1]  ...
+        --- GPU 2 ---
+        invalid gpu device    ← これ以降は無効
 
     ## スクリプト (`tools/upscale_2x.py`)
 
@@ -316,6 +346,30 @@ AI画像生成時に発生する色ムラが目立たなくなり綺麗な仕上
     - **2 回目 2x**: 2508×2508 → 5016×5016
     - **Lanczos リサイズ**: 5016×5016 → 4500×4500 (透過 RGBA 保持)
     - 結果: スライスツールが読める 4500×4500 RGBA PNG
+
+    ## 実際の計測 (RTX 2060, 1254×1254 入力, sudo_RealESRGAN2x_Dropout モデル)
+
+    | ファイル           | 1回目 2x | 2回目 2x | 合計     |
+    |--------------------|----------|----------|----------|
+    | メイン（目を開いた）     | 6.0s     | 15.4s    | 27.2s    |
+    | メイン（目を瞑った）     | 5.5s     | 14.7s    | 25.8s    |
+    | 小さく「あ」の（目を開いた） | 5.6s     | 15.0s    | 26.2s    |
+    | 小さく「あ」の（目を瞑った） | 5.8s     | 17.5s    | 29.1s    |
+    | 大きく「あ」の（目を開いた） | 5.7s     | 15.3s    | 26.8s    |
+    | 大きく「あ」の（目を瞑った） | 5.7s     | 15.0s    | 27.7s    |
+    | **合計 6 枚**         | -        | -        | **162.8s** |
+
+    ## なぜ DirectML ではないのか
+
+    同じスクリプトは `onnxruntime-directml` バックエンドも実装済みだが、実測で
+    DirectML 経路は `1254×1254 → 5016×5016` の中間ステップで
+    `D3D12_ERROR_REMOVED_DEVICE` (`887A0020`) を起こし、CPU にフォールバックする問題が
+    出た (RTX 2060 + ONNX 1.23.2 + DirectML 12 で再現)。タイル分割 (512px) で
+    一応動くが、所要時間が NCNN の **約 16 倍** (1 枚 423 秒)。
+
+    1 度 DirectML を試して動かない場合、`onnxruntime` パッケージに切り替えるか、
+    NCNN Vulkan にフォールバックしてください。`onnxruntime-directml` パッケージは
+    `onnxruntime` に GPU サポートを追加する拡張で、ベースが入ってないと動きません。
 
     ## 次のステップ
 

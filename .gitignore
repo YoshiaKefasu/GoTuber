@@ -42,3 +42,7 @@ desktop.ini
 sheets/
 uploads/
 新キャラ資料/
+
+# Real-ESRGAN / NCNN binaries (download manually, see docs/01_画像生成用プロンプト.txt Section [6])
+tools/models/
+/*.ncnn-*
