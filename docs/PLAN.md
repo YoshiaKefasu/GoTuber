@@ -395,6 +395,8 @@ YAML 読み込み後、**フェイルファスト** で以下を検証：
 | Phase | 内容 | 期間 | 状態 |
 |---|---|---|---|
 | 1 | Pure Go PNGTuber MVP | 1〜2 週 | 着手準備完了 |
+| 1.13a | マイク選択 + TOML 永続化 | 4-5 日 | 🔜 予定 (Phase 1.13b 後) |
+| 1.13b | UI 非表示ショートカット (`Ctrl+Shift+H`) | 1 日 | 🔜 予定 (1.13a の前) |
 | 2 | Camera 入力 | 3〜5 週 | **保留中**（Q8 で再評価待ち） |
 | 3 | VMC Protocol 出力 | 1〜2 週 | 未着手 |
 
@@ -580,6 +582,8 @@ Phase 1 を以下の順序で進める。各ステップ完了時にコミット
 10. **Phase 1.10**: README + LICENSE + `tools/requirements.txt` + `tools/LICENSE-third-party` + `docs/PHASE1.md` + **`go test ./...` 全パス確認**
 11. **Phase 1.11**: Polish 適用 (decodePCM16 sync.Pool、Slider 定数化、clampInt) + **`tools/slice_character_sheets.py`** 実装 (5×5 シート → 25 枚分割、MIT 継承) + テスト 8 件
 12. **Phase 1.12**: キャラクターシステム **全 port (tomari-guruguru → Go)** — Phase 1.11 の自作 (snake_case キー・Y軸反転・シンプル版スライスツール) を **完全廃止** し、元 `src/character-config.js` の camelCase スキーマ (`basePath`, `eyesOpen`, `eyesClosed`, `close`)、元 `src/app.jsx:60-62` の Y軸反転なし計算式、元 `tools/slice_character_sheets.py` (648 行・component mode・`--remove-gray-residue`) を MIT 継承。設定 YAML も camelCase 化。マウス追従は Y 軸反転削除 (`r0=上, r4=下`)。`docs/新キャラ差し替え手順.md` は元 MIT 翻訳を全面書き換え (「100% port」を冒頭明記)
+13. **Phase 1.13a** (予定): マイク選択 + TOML 永続化 — malgo `Devices` 列挙 → ebitenui `ListComboButton` (ComboBox) ドロップダウン → **選択デバイスの malgo 内部 ID** を `os.UserConfigDir() + "GoTuber/config.toml"` (`[audio] device_id = "..."`) に保存 → 再起動時復元 (ID で照合するため表示名重複も問題なし)。新規パッケージ: `internal/config/` (Load/Save, `os.UserConfigDir()` でパス取得), `internal/audio/devices.go` (ListDevices/NewCaptureByID)。既存 `internal/audio/capture.go` をデバイス ID 対応に拡張。サブフェーズ 1.13a.1〜1.13a.8 (4-5 日)。詳細は `docs/PHASE1.md` Section 10.2
+14. **Phase 1.13b** (予定): UI 非表示ショートカット — `Ctrl+Shift+H` で Tweaks パネル + Settings ボタン + 設定ドロップダウン全部を**トグル**表示/非表示。OBS ウィンドウキャプチャで UI が映り込まないようにする。kill switch (Esc) は uiHidden に関わらず常に有効。新規 `Game.uiHidden bool` フィールド。サブフェーズ 1.13b.1〜1.13b.6 (1 日)。**1.13b を先にリリース** (リスク小・独立性高)、その後 1.13a 着手。詳細は `docs/PHASE1.md` Section 10.3
 
 ---
 

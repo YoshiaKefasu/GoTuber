@@ -23,6 +23,7 @@
 - **CJK フォント埋め込み** — Gen Interface JP Regular (Inter + Noto Sans JP) をバイナリ同梱
 - **Kill Switch** — `Esc` キー / `Q` キー / `Ctrl+C` / Tweaks の Quit ボタン で即終了
 - **元 `src/character-config.js` 互換** — `basePath`, `eyesOpen`, `eyesClosed`, `close` の camelCase キー (Phase 1.12 で port)
+- **マイクデバイス選択** (Phase 1.13a 予定) — F1 → Settings → ドロップダウンで OS 全入力デバイスから選択、`os.UserConfigDir()/GoTuber/config.toml` に保存して再起動時に復元
 
 > **Phase 1 スコープ外**（Phase 1.5+ で再評価）: 音声ファイル口パク（mp3/wav/ogg）
 
@@ -294,10 +295,20 @@ GoTuber/
 | Phase | 状態 | 内容 |
 |---|---|---|
 | **Phase 1.1 〜 1.12** | ✅ **完了** | MVP: 透過 + クリックスルー + アトラス + マウス追従 (Y軸反転なし) + まばたき + メインマイク口パク + Tweaks + CJK フォント + ビルドスクリプト + slice ツール (Phase 1.12 で元 648 行版 MIT 継承) |
+| **Phase 1.13b** | 🔜 予定 | UI 非表示ショートカット (`Ctrl+Shift+H` で Tweaks + 設定 UI を**全部トグル**表示/非表示。OBS ウィンドウキャプチャで UI が映り込まないようにする) |
+| **Phase 1.13a** | 🔜 予定 | マイク選択 + TOML 永続化 — malgo `Devices` 列挙 → ebitenui `ListComboButton` (ComboBox) ドロップダウン → 選択デバイスの malgo 内部 ID を `os.UserConfigDir()/GoTuber/config.toml` に保存 → 再起動時復元 (ID 照合で重複表示名も問題なし) |
 | Phase 2 | **保留中** | カメラ VTuber: 顔追従 + 口の自動検出（Q8 で再評価待ち） |
 | Phase 3 | 未着手 | VMC Protocol 出力 |
 
 設計判断とフェーズ詳細: [docs/PLAN.md](docs/PLAN.md) / [docs/PHASE1.md](docs/PHASE1.md) 参照。
+
+## キーボードショートカット
+
+| ショートカット | 機能 | Phase |
+|---|---|---|
+| `Esc` | 終了 (kill switch) | 1.1 |
+| `F1` | Tweaks パネル表示/非表示 | 1.8 |
+| `Ctrl+Shift+H` | 全ての UI (Tweaks + 設定) を**一括トグル**表示/非表示。**配信時に使用** (OBS ウィンドウキャプチャで UI が映らない) | 1.13b (予定) |
 
 ## テスト
 
@@ -333,10 +344,13 @@ Phase 1.10 時点で:
 
 ## ステータス
 
-✅ **Phase 1 完了 (1.1〜1.12)** — コードレビュー対応済み、`go test ./...` 全パス (Windows バイナリ 19.5 MB / Linux バイナリ 25 MB)。キャラクターシステムは元 [tomari-guruguru](https://github.com/rotejin/tomari-guruguru) から 100% port (camelCase 設定、Y軸反転なし、1200×1200 anchored WebP、元 648 行スライスツール MIT 継承)。
+✅ **Phase 1 コア完了 (1.1〜1.12)** — コードレビュー対応済み、`go test ./...` 全パス (Windows バイナリ 19.5 MB / Linux バイナリ 25 MB)。キャラクターシステムは元 [tomari-guruguru](https://github.com/rotejin/tomari-guruguru) から 100% port (camelCase 設定、Y軸反転なし、1200×1200 anchored WebP、元 648 行スライスツール MIT 継承)。
+
+🔜 **次の予定**: Phase 1.13b (UI 非表示ショートカット) → Phase 1.13a (マイク選択永続化)。
 
 - プラン: [docs/PLAN.md](docs/PLAN.md) v0.4.3
 - Phase 1.12 詳細: [docs/PHASE1.md](docs/PHASE1.md) Section 9
+- Phase 1.13 (1.13a/1.13b) 詳細: [docs/PHASE1.md](docs/PHASE1.md) Section 10
 - 設計判断: pure Go 書き直し採用（Wails / headless JS 比較の上、Section 0.5 参照）
 - ビルド方針: Windows 10/11（mingw-w64 クロスコンパイル）または WSL Ubuntu（gcc）
 - **視覚テストはユーザー側で実施予定**（実装完了 → 実行確認は手動）
