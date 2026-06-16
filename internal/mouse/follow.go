@@ -1,6 +1,8 @@
 // Package mouse はマウス追従ロジックを提供する。
 package mouse
 
+import "math"
+
 // Follower はマウス位置を smoothing で追従する。
 //
 // 座標系: target/current 共に [-1, 1] の正規化座標。
@@ -56,10 +58,11 @@ func (f *Follower) Update(mouseX, mouseY, winW, winH int, responsiveness float64
 }
 
 // Cell は現在の表示位置 (current) を 5×5 グリッドの (row, col) にマップする。
-// Y 軸反転なし: マウス上=row 0、下=row 4 (元 tomari-guruguru app.jsx:62 と完全一致)
+// 元 tomari-guruguru app.jsx:61-62 と同じ式: `Math.round((current+1)/2 * (N-1))`、
+// Go 側では `int(math.Round(...))` で `Math.round` の最近接丸めを再現 (y=上=row 0, y=下=row 4)。
 func (f *Follower) Cell() (row, col int) {
-	c := int((f.currentX + 1) / 2 * 5)
-	r := int((f.currentY + 1) / 2 * 5) // Y 軸反転なし (r0=上, r4=下)
+	c := int(math.Round((f.currentX + 1) / 2 * 4)) // 4 = COLS - 1
+	r := int(math.Round((f.currentY + 1) / 2 * 4)) // 4 = ROWS - 1
 	if c < 0 {
 		c = 0
 	}

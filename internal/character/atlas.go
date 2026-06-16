@@ -116,6 +116,14 @@ func (a *Atlas) Get(sheetIdx, row, col int) (*ebiten.Image, bool) {
 	return a.images[sheetIdx][row][col], true
 }
 
+// SheetFor は (eyesClosed, mouth) に対応するシート index を返す。
+// 内部の Config.SheetFor に委譲。Game の sheetForState() から呼ばれる。
+//   - eyesClosed: false=目開け (A/B/C), true=目閉じ (D/E/F)
+//   - mouth: 0=Close, 1=Half, 2=Open
+func (a *Atlas) SheetFor(eyesClosed bool, mouth int) (sheetName string, sheetIdx int) {
+	return a.cfg.SheetFor(eyesClosed, mouth)
+}
+
 // loadImageFile はファイルを開いて image.Decode → ebiten.Image 変換する。
 // 16 MB を超えるファイルはエラー（DoS 対策）。
 func loadImageFile(path string) (*ebiten.Image, error) {

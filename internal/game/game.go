@@ -148,12 +148,10 @@ func (g *Game) Draw(screen *ebiten.Image) {
 }
 
 // sheetForState は現在の (eyesState, mouthState) に対応する sheet index を返す。
+// character.Config.SheetFor (元 character-config.js の sheets マッピング) に委譲。
 func (g *Game) sheetForState() int {
-	eyesIdx := 0
-	if g.eyesClosed {
-		eyesIdx = 1
-	}
-	return eyesIdx*3 + g.mouthState
+	_, idx := g.atlas.SheetFor(g.eyesClosed, g.mouthState)
+	return idx
 }
 
 // Layout はウィンドウサイズを返す。

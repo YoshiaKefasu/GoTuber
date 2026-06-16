@@ -57,8 +57,9 @@ func TestFollow_SmoothingConverges(t *testing.T) {
 }
 
 // TestFollow_CellMapping はウィンドウ四隅が正しいセルにマップされることを確認。
-// Y 軸反転なし: 左上 → (0, 0)、右下 → (4, 4)、中央 → (2, 2)
-// (元 tomari-guruguru app.jsx:62 と一致)
+// 元 tomari-guruguru app.jsx:60-62 の式 (Math.round((y+1)/2 * 4)) を完全再現:
+// 左上 → (0, 0)、右下 → (4, 4)、中央 → (2, 2)。
+// Go 版は int(math.Round(...)) で JS の Math.round と完全等価。
 func TestFollow_CellMapping(t *testing.T) {
 	f := NewFollower(1.0) // 即追従でテスト
 
@@ -81,6 +82,36 @@ func TestFollow_CellMapping(t *testing.T) {
 			r, c := f.Cell()
 			if r != tt.wantRow || c != tt.wantCol {
 				t.Errorf("got (%d, %d), want (%d, %d)", r, c, tt.wantRow, tt.wantCol)
+			}
+		})
+	}
+}
+
+// TestFollow_Granularity は元 tomari-guruguru app.jsx:62 (Math.round((y+1)/2 * 4)) と
+// Go 版 (int(math.Round((y+1)/2 * 4))) の完全一致を確認する。
+// 5 つの中心点 (-1, -0.5, 0, 0.5, 1) で双方同じセルを選ぶ。
+func TestFollow_Granularity(t *testing.T) {
+	tests := []struct {
+		name    string
+		normY   float64 // 正規化 y ([-1, 1])
+		wantRow int
+	}{
+		{"y=-1.0 (top)", -1.0, 0},
+		{"y=-0.5 (やや上)", -0.5, 1},
+		{"y=0.0 (center)", 0.0, 2},
+		{"y=0.5 (やや下)", 0.5, 3},
+		{"y=1.0 (bottom)", 1.0, 4},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := NewFollower(1.0)
+			// normY → mouseY 変換: mouseY = (normY + 1) / 2 * 480
+			mouseY := int((tt.normY + 1) / 2 * 480)
+			f.Update(320, mouseY, 640, 480, 1.0)
+			r, _ := f.Cell()
+			if r != tt.wantRow {
+				t.Errorf("normY=%v: got row=%d, want %d", tt.normY, r, tt.wantRow)
 			}
 		})
 	}
