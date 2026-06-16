@@ -18,9 +18,9 @@ import (
 )
 
 const (
-	windowTitle  = "GoTuber"
-	windowWidth  = 1280
-	windowHeight = 720
+	windowTitle             = "GoTuber"
+	initialWindowWidth      = 1280
+	initialWindowHeight     = 720
 )
 
 // Game は Ebitengine のゲームロジック実装。
@@ -60,8 +60,8 @@ func New(
 		panel:       panel,
 		tweaks:      tweaksState,
 		firstUpdate: true,
-		width:       windowWidth,
-		height:      windowHeight,
+		width:       initialWindowWidth,
+		height:      initialWindowHeight,
 	}
 }
 
