@@ -7,52 +7,72 @@
 
 ### 1. キャラ生成ワークフローの 1 コマンド化
 
-**目的**: ユーザー (配信者) が AI で生成した 6 枚 (A〜F) の green screen PNG を、1 コマンドで透過済 150 枚 WebP に変換し、`assets/characters/_default/` まで配置する。
+**目的**: ユーザー (配信者) が AI で生成した 6 枚 (A〜F) の green screen PNG を、**chromakey 透過 → 2x x 2 アップスケール (4500×4500) → 5×5 スライス** を **1 コマンドで** 透過済 150 枚 WebP に変換し、`assets/characters/_default/` まで配置する。
 
-**現状** (yosia さんが手作業で実行した 6 ステップ):
+**現在のワークフロー** (yosia さんが手作業で実行した 6 ステップ):
 
 1. `green_input/` に `*#00FF00.png` を 6 枚配置
-2. `python tools/apply_green_key.py green_input/ green_alpha/` (chroma key)
+2. `python tools/apply_green_key.py green_input/ green_alpha/` (chroma key 透過)
 3. リネーム `A_open_close.png` 〜 `F_close_open.png` (手作業 PowerShell)
-4. `python tools/upscale_2x.py 新キャラ資料_4500/ 新キャラ資料_4500_out/ --target 4500` (2x x 2 アップスケール)
-5. `python tools/slice_character_sheets.py --source 新キャラ資料_4500_out/ --slices-out 出力先/` (スライス)
+4. `python tools/upscale_2x.py 新キャラ資料_4500/ 新キャラ資料_4500_out/ --target 4500` (**2x x 2 = 4x アップスケール** → 4500×4500 リサイズ)
+5. `python tools/slice_character_sheets.py --source 新キャラ資料_4500_out/ --slices-out 出力先/` (5×5 = 25 枚にスライス、計 150 枚 WebP)
 6. 出力 150 枚を `assets/characters/_default/` に移動 (手作業)
 
-**目標**:
+**目標**: 上記 6 ステップを **`build_default_character.py <入力フォルダ>` 1 コマンドで** 全自動実行。
+
+**統合パイプライン**:
+
+| 段階 | 処理 | 既存スクリプト | 統合先での扱い |
+|------|------|---------------|---------------|
+| 1 | 入力検証 (`*#00FF00.png` 6 枚) | - | 自動マッピング |
+| 2 | **chroma key 透過** (`apply_green_key.py`) | 単体スクリプト | import 呼び出し |
+| 3 | リネーム (A/B/C/D/E/F 接頭辞) | 手作業 | 自動 |
+| 4 | **2x x 2 アップスケール + 4500×4500 リサイズ** (`upscale_2x.py`) | 単体スクリプト | subprocess |
+| 5 | **5×5 スライス → 150 枚 WebP** (`slice_character_sheets.py`) | 単体スクリプト | subprocess |
+| 6 | `assets/characters/_default/` にデプロイ | 手作業 | 自動 (`--auto-deploy` フラグ) |
+
+**CLI**:
 
 ```bash
-python tools/build_default_character.py <6枚のフォルダ> [--auto-deploy]
-# または
-./scripts/build-character.sh 6枚のフォルダ
+# 標準実行 (6 枚入力 → 中間フォルダ生成 → 150 枚 WebP 出力)
+python tools/build_default_character.py <入力フォルダ>
+
+# 自動デプロイ (出力 150 枚を assets/characters/_default/ に上書き)
+python tools/build_default_character.py <入力フォルダ> --auto-deploy
+
+# ドライラン (実行せずパイプライン確認のみ)
+python tools/build_default_character.py <入力フォルダ> --dry-run
+
+# オプション
+python tools/build_default_character.py <入力フォルダ> \
+    --threshold 80 \            # chroma key 閾値 (デフォルト 80)
+    --target 4500 \             # アップスケール後サイズ
+    --scale 2 \                 # 1 段階の倍率 (2x x 2 = 4x)
+    --upscale-model <model> \   # カスタム NCNN モデル
+    --device-id 0 \             # GPU index
+    --keep-intermediate         # 中間ファイル保持 (デバッグ用)
 ```
 
-**実装内容**:
+**入力ファイル名規則** (自動シートマッピング):
 
-- `tools/build_default_character.py` を新規作成
-- パイプライン:
-  1. **入力検証**: `*#00FF00.png` または `*_gs.png` 等の命名規則必須化
-  2. **シート自動マッピング**: ファイル名から A/B/C/D/E/F を推測 (例: ファイル名に `eyeopen`/`eyeclose`, `mouthclose`/`mouthopen` を含む)
-  3. **chroma key**: 既存の `apply_green_key.py` を import 呼び出し
-  4. **リネーム**: A/B/C/D/E/F 接頭辞の標準名に統一
-  5. **アップスケール**: 既存の `upscale_2x.py` を subprocess で呼び出し (NCNN Vulkan 検出)
-  6. **スライス**: 既存の `slice_character_sheets.py` を subprocess で呼び出し
-  7. **デプロイ**: `--auto-deploy` フラグで `assets/characters/_default/` に直接移動 + バックアップ
-- **オプション**:
-  - `--threshold`: chroma key 閾値 (デフォルト 80)
-  - `--upscale-model`: カスタム NCNN モデル
-  - `--device-id`: GPU index
-  - `--dry-run`: 実行せず確認のみ
-  - `--keep-intermediate`: 中間ファイル保持
-- **ログ**: 各段階の所要時間・ファイル数・α 率を stdout 出力
-- **エラー処理**: いずれかの段階で失敗したらそれ以降の処理中断 + 中間状態レポート
+| シート | ファイル名パターン | 例 |
+|--------|------------------|-----|
+| A (目開け + 口とじ) | `メイン（目を開いた）#00FF00.png` | yosia さんの実例 |
+| B (目開け + 口中間) | `小さく「あ」の（目を開いた）#00FF00.png` | |
+| C (目開け + 口開け) | `大きく「あ」の（目を開いた）#00FF00.png` | |
+| D (目閉じ + 口とじ) | `メイン（目を瞑った）#00FF00.png` | |
+| E (目閉じ + 口中間) | `小さく「あ」の（目を瞑った）#00FF00.png` | |
+| F (目閉じ + 口開け) | `大きく「あ」の（目を瞑った）#00FF00.png` | |
 
 **DoD**:
 
-- 1 コマンドで 6 枚 green screen PNG → 透過済 150 枚 WebP → `_default/` まで完走
+- 1 コマンドで **6 枚 green screen PNG → 透過済 150 枚 WebP → `_default/` まで完走**
+  - 途中の chroma key + 2x x 2 アップスケール + 5×5 スライスも自動
 - `--dry-run` モードで事前確認可能
 - chroma key 閾値、GPU 選択等のオプションが CLI から指定可能
 - 既存の単体スクリプト (apply_green_key / upscale_2x / slice_character_sheets) のインターフェースに変更なし
 - `docs/新キャラ差し替え手順.md` から `build_default_character.py` への参照を追加
+- パイプライン全体の所要時間をログ出力 (各段階の所要時間含む)
 
 **工数**: 1-2 時間
 
