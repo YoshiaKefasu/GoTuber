@@ -213,7 +213,6 @@ GoTuber/
 │   ├── build.sh
 │   ├── dev.ps1
 │   ├── dev.sh
-│   ├── deploy-kasou.sh
 │   └── setup-gocv.sh            # Phase 2: OpenCV 4.13 インストール
 ├── go.mod
 ├── go.sum
@@ -451,8 +450,8 @@ go run ./cmd/gotuber --character assets/characters/_default
 # ログレベル
 GOTUBER_LOG_LEVEL=debug go run ./cmd/gotuber
 
-# KASOU へデプロイ
-KASOU_HOST=kasou ./scripts/deploy-kasou.sh   # .ssh/config に Host kasou エントリ要
+# KASOU へデプロイ (将来用、Phase 1 では未実装)
+# KASOU_HOST=kasou ./scripts/deploy-kasou.sh   # .ssh/config に Host kasou エントリ要
 ```
 
 ### 6.4 緊急時の KASOU クリーンアップ
@@ -576,7 +575,7 @@ Phase 1 を以下の順序で進める。各ステップ完了時にコミット
 6. **Phase 1.6**: 自動まばたき + テスト
 7. **Phase 1.7**: malgo マイク + Ebitengine 音声ファイル + エンベロープ + 口パク + テスト
 8. **Phase 1.8**: Tweaks パネル（ebitenui）+ CJK フォント埋め込み（英語ラベル）
-9. **Phase 1.9**: ビルドスクリプト（`build.ps1` / `build.sh` / `deploy-kasou.sh`）+ Windows + Linux 動作確認
+9. **Phase 1.9**: ビルドスクリプト（`build.ps1` / `build.sh` / `dev.*`）+ Windows + Linux 動作確認
 10. **Phase 1.10**: README + LICENSE + `tools/requirements.txt` + `tools/LICENSE-third-party` + `docs/PHASE1.md` + **`go test ./...` 全パス確認**
 
 ---

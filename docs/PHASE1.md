@@ -140,7 +140,6 @@
 - `build.ps1`（Windows native）
 - `build.sh`（WSL Ubuntu / Linux バイナリ）
 - `dev.ps1` / `dev.sh`（開発ループ）
-- `deploy-kasou.sh`（KASOU デプロイ）
 - `tools/requirements.txt` 同梱（Pillow, numpy のバージョン固定）
 - `tools/LICENSE-third-party` 同梱（依存ライブラリのライセンス一覧）
 - README に `pip install -r tools/requirements.txt` 手順明記
