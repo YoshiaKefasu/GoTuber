@@ -1,27 +1,16 @@
 // Package mouse はマウス追従ロジックを提供する。
-// ウィンドウ座標を [-1, 1] の正規化座標に変換し、
-// responsiveness に応じた lerp で滑らかに追従する。
 package mouse
 
-// Follower はマウス追従の現在状態とロジックを保持する。
+// Follower はマウス位置を smoothing で追従する。
 //
 // 座標系: target/current 共に [-1, 1] の正規化座標。
-//   - (-1, -1) = ウィンドウ左上
-//   - ( 0,  0) = ウィンドウ中央
-//   - ( 1,  1) = ウィンドウ右下
-//
-// Y 軸は「マウスの上方向 = current.y = -1」とする（ウィンドウ座標の上=小さい y）。
-// Cell() では Y 軸を反転し、original tomari-guruguru と同様に
-// 「マウス下方向 = row 0」「マウス上方向 = row 4」となる。
 type Follower struct {
-	targetX, targetY   float64 // 目標位置（クランプ後、[-1, 1]）
-	currentX, currentY float64 // 現在表示位置（lerp で target に追従）
-	responsiveness     float64 // 1 フレームあたりの追従率 (0=動かない, 1=即追従)
+	targetX, targetY   float64
+	currentX, currentY float64
+	responsiveness     float64
 }
 
 // NewFollower は新しい Follower を作成する。
-// responsiveness: 0.0 (停止) 〜 1.0 (即追従)、推奨 0.2〜0.5。
-// 範囲外の値はクランプされる。
 func NewFollower(responsiveness float64) *Follower {
 	if responsiveness < 0 {
 		responsiveness = 0
@@ -34,17 +23,21 @@ func NewFollower(responsiveness float64) *Follower {
 	}
 }
 
-// Update はマウス位置（ウィンドウ座標）を受け取り、target を更新して
-// current を lerp で target に近づける。
-// winW / winH が 0 以下の場合は何もしない。
-func (f *Follower) Update(mouseX, mouseY, winW, winH int) {
+// Update はマウス位置（ウィンドウ座標）を受け取り、target を更新して current を lerp で近づける。
+// responsiveness: 0.0=動かない、1.0=即追従。値が大きいほど追従が速い。
+// 動的に変更可能 (Tweaks パネルから)。
+func (f *Follower) Update(mouseX, mouseY, winW, winH int, responsiveness float64) {
 	if winW <= 0 || winH <= 0 {
 		return
 	}
-	// [-1, 1] にマップ
+	if responsiveness < 0 {
+		responsiveness = 0
+	}
+	if responsiveness > 1 {
+		responsiveness = 1
+	}
 	tx := float64(mouseX*2)/float64(winW) - 1
 	ty := float64(mouseY*2)/float64(winH) - 1
-	// クランプ
 	if tx < -1 {
 		tx = -1
 	}
@@ -58,18 +51,15 @@ func (f *Follower) Update(mouseX, mouseY, winW, winH int) {
 		ty = 1
 	}
 	f.targetX, f.targetY = tx, ty
-	// lerp
-	f.currentX += (f.targetX - f.currentX) * f.responsiveness
-	f.currentY += (f.targetY - f.currentY) * f.responsiveness
+	f.currentX += (f.targetX - f.currentX) * responsiveness
+	f.currentY += (f.targetY - f.currentY) * responsiveness
 }
 
 // Cell は現在の表示位置 (current) を 5×5 グリッドの (row, col) にマップする。
-//   - row 0 = マウス下方向、row 4 = マウス上方向（Y 軸反転）
-//   - col 0 = マウス左方向、col 4 = マウス右方向
-//   - 戻り値: 0〜4
+// Y 軸反転: マウス下=row 0、上=row 4 (tomari-guruguru 互換)
 func (f *Follower) Cell() (row, col int) {
 	c := int((f.currentX + 1) / 2 * 5)
-	r := 4 - int((f.currentY + 1) / 2 * 5) // Y 軸反転: マウス下=row 0、上=row 4 (tomari-guruguru 互換)
+	r := 4 - int((f.currentY + 1) / 2 * 5) // Y 軸反転: マウス下=row 0, 上=row 4
 	if c < 0 {
 		c = 0
 	}
@@ -85,12 +75,10 @@ func (f *Follower) Cell() (row, col int) {
 	return r, c
 }
 
-// target は現在の target を返す（同 package のテストからのみ使用）。
 func (f *Follower) target() (x, y float64) {
 	return f.targetX, f.targetY
 }
 
-// current は現在の current を返す（同 package のテストからのみ使用）。
 func (f *Follower) current() (x, y float64) {
 	return f.currentX, f.currentY
 }

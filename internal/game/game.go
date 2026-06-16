@@ -10,8 +10,10 @@ import (
 	"github.com/YoshiaKefasu/GoTuber/internal/character"
 	"github.com/YoshiaKefasu/GoTuber/internal/killswitch"
 	"github.com/YoshiaKefasu/GoTuber/internal/mouse"
+	"github.com/YoshiaKefasu/GoTuber/internal/tweaks"
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
+	"github.com/hajimehoshi/ebiten/v2/inpututil"
 )
 
 const (
@@ -22,40 +24,84 @@ const (
 
 // Game は Ebitengine のゲームロジック実装。
 type Game struct {
-	atlas       *character.Atlas
-	mouse       *mouse.Follower
-	blink       *blink.Scheduler
-	audio       *audio.Mover // nil 可（オーディオデバイスなし環境用）
+	atlas  *character.Atlas
+	mouse  *mouse.Follower
+	blink  *blink.Scheduler
+	audio  *audio.Mover
+	panel  *tweaks.Panel
+	tweaks *tweaks.State
+
 	firstUpdate bool
 
-	// 内部状態 (Update で更新、Draw で参照)
-	eyesClosed bool // blink scheduler から
-	mouthState int  // 0=closed, 1=half, 2=open (audio.Mover から)
+	// 内部状態
+	eyesClosed bool
+	mouthState int
 }
 
-// New は新しい Game を作成する。audioMover が nil でも動作する（口パク無効）。
-func New(atlas *character.Atlas, follower *mouse.Follower, blinkSch *blink.Scheduler, audioMover *audio.Mover) *Game {
-	return &Game{atlas: atlas, mouse: follower, blink: blinkSch, audio: audioMover, firstUpdate: true}
+// New は新しい Game を作成する。
+func New(
+	atlas *character.Atlas,
+	follower *mouse.Follower,
+	blinkSch *blink.Scheduler,
+	audioMover *audio.Mover,
+	panel *tweaks.Panel,
+	tweaksState *tweaks.State,
+) *Game {
+	return &Game{
+		atlas:       atlas,
+		mouse:       follower,
+		blink:       blinkSch,
+		audio:       audioMover,
+		panel:       panel,
+		tweaks:      tweaksState,
+		firstUpdate: true,
+	}
 }
 
 // Update は毎フレーム呼ばれる。
 func (g *Game) Update() error {
 	if g.firstUpdate {
 		g.firstUpdate = false
-		ebiten.SetWindowMousePassthrough(true)
 		ebiten.SetWindowFloating(true)
 	}
 
-	// マウス位置取得 → Follower 更新
+	// F1 で panel 表示切替 (単発検出)
+	prevPanelVisible := g.tweaks.PanelVisible
+	if inpututil.IsKeyJustPressed(ebiten.KeyF1) {
+		g.tweaks.PanelVisible = !g.tweaks.PanelVisible
+	}
+	// パネル表示状態に応じてクリックスルー切替 (Issue #3222 対策で Update 内で呼ぶ)
+	// PanelVisible 中はマウスイベントをウィンドウに届ける必要があるため passthrough 無効化
+	if g.tweaks.PanelVisible != prevPanelVisible {
+		ebiten.SetWindowMousePassthrough(!g.tweaks.PanelVisible)
+	}
+
+	// Tweaks panel の Quit ボタン
+	if g.tweaks.QuitRequested {
+		return ebiten.Termination
+	}
+
+	// マウス追従
 	mx, my := ebiten.CursorPosition()
-	g.mouse.Update(mx, my, windowWidth, windowHeight)
+	g.mouse.Update(mx, my, windowWidth, windowHeight, g.tweaks.MouseResponsiveness)
 
-	// 自動まばたき更新
-	g.eyesClosed = g.blink.Update(time.Now())
+	// 自動まばたき
+	if g.tweaks.BlinkEnabled {
+		g.eyesClosed = g.blink.Update(time.Now())
+	} else {
+		g.eyesClosed = false
+	}
 
-	// 口パク更新（audio デバイスがない場合はスキップ）
-	if g.audio != nil {
+	// 口パク
+	if g.audio != nil && g.tweaks.AudioEnabled {
 		g.mouthState = g.audio.Update()
+	} else {
+		g.mouthState = 0
+	}
+
+	// Tweaks panel UI 更新
+	if g.tweaks.PanelVisible {
+		g.panel.Update()
 	}
 
 	// kill switch
@@ -76,6 +122,9 @@ func (g *Game) Draw(screen *ebiten.Image) {
 			screen.Fill(color.RGBA{0, 0, 0, 180})
 			ebitenutil.DebugPrintAt(screen, "Loading...", 20, 20)
 		}
+		if g.tweaks.PanelVisible {
+			g.panel.Draw(screen)
+		}
 		return
 	}
 
@@ -86,23 +135,19 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		return
 	}
 
-	// 中央描画
 	iw, ih := img.Bounds().Dx(), img.Bounds().Dy()
 	ox := (windowWidth - iw) / 2
 	oy := (windowHeight - ih) / 2
 	op := &ebiten.DrawImageOptions{}
 	op.GeoM.Translate(float64(ox), float64(oy))
 	screen.DrawImage(img, op)
+
+	if g.tweaks.PanelVisible {
+		g.panel.Draw(screen)
+	}
 }
 
 // sheetForState は現在の (eyesState, mouthState) に対応する sheet index を返す。
-// 戻り値:
-//   - 0: eyes_open + mouth_closed
-//   - 1: eyes_open + mouth_half
-//   - 2: eyes_open + mouth_open
-//   - 3: eyes_closed + mouth_closed
-//   - 4: eyes_closed + mouth_half
-//   - 5: eyes_closed + mouth_open
 func (g *Game) sheetForState() int {
 	eyesIdx := 0
 	if g.eyesClosed {

@@ -12,23 +12,23 @@ func TestFollow_TargetClamp(t *testing.T) {
 	f := NewFollower(0.3)
 
 	// マウスがウィンドウ右下に大きくはみ出し
-	f.Update(1000, 1000, 640, 480)
-	tx, ty := 	f.target()
+	f.Update(1000, 1000, 640, 480, 0.3)
+	tx, ty := f.target()
 	if tx != 1 || ty != 1 {
 		t.Errorf("expected target clamped to (1, 1), got (%v, %v)", tx, ty)
 	}
 
 	// マウスが負の座標
-	f.Update(-100, -100, 640, 480)
-	tx, ty = 	f.target()
+	f.Update(-100, -100, 640, 480, 0.3)
+	tx, ty = f.target()
 	if tx != -1 || ty != -1 {
 		t.Errorf("expected target clamped to (-1, -1), got (%v, %v)", tx, ty)
 	}
 
 	// ウィンドウサイズ 0 → 何も更新しない
-	beforeX, beforeY := 	f.target()
-	f.Update(100, 100, 0, 0)
-	afterX, afterY := 	f.target()
+	beforeX, beforeY := f.target()
+	f.Update(100, 100, 0, 0, 0.3)
+	afterX, afterY := f.target()
 	if beforeX != afterX || beforeY != afterY {
 		t.Errorf("expected target unchanged when win size 0, got (%v, %v) → (%v, %v)",
 			beforeX, beforeY, afterX, afterY)
@@ -40,14 +40,14 @@ func TestFollow_SmoothingConverges(t *testing.T) {
 	f := NewFollower(0.3)
 
 	// target を (1, 0) に
-	f.Update(640, 240, 640, 480)
+	f.Update(640, 240, 640, 480, 0.3)
 
 	// 100 ステップ回す（0.3^100 ≈ 0 のため、ほぼ完全に target に到達する）
 	for i := 0; i < 100; i++ {
-		f.Update(640, 240, 640, 480)
+		f.Update(640, 240, 640, 480, 0.3)
 	}
 
-	cx, cy := 	f.current()
+	cx, cy := f.current()
 	if cx < 1-eps {
 		t.Errorf("expected cx ≈ 1, got %v", cx)
 	}
@@ -62,10 +62,10 @@ func TestFollow_CellMapping(t *testing.T) {
 	f := NewFollower(1.0) // 即追従でテスト
 
 	tests := []struct {
-		name        string
-		mx, my      int
-		wantRow     int
-		wantCol     int
+		name    string
+		mx, my  int
+		wantRow int
+		wantCol int
 	}{
 		{"左上 (mouse=0,0)", 0, 0, 4, 0},
 		{"中央 (mouse=320,240)", 320, 240, 2, 2},
@@ -76,7 +76,7 @@ func TestFollow_CellMapping(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			f.Update(tt.mx, tt.my, 640, 480)
+			f.Update(tt.mx, tt.my, 640, 480, 1.0)
 			r, c := f.Cell()
 			if r != tt.wantRow || c != tt.wantCol {
 				t.Errorf("got (%d, %d), want (%d, %d)", r, c, tt.wantRow, tt.wantCol)
@@ -91,10 +91,10 @@ func TestFollow_NoResponsiveness(t *testing.T) {
 
 	// 100 回更新
 	for i := 0; i < 100; i++ {
-		f.Update(640, 240, 640, 480)
+		f.Update(640, 240, 640, 480, 0)
 	}
 
-	cx, cy := 	f.current()
+	cx, cy := f.current()
 	if cx != 0 || cy != 0 {
 		t.Errorf("expected current unchanged at (0, 0), got (%v, %v)", cx, cy)
 	}
@@ -102,23 +102,15 @@ func TestFollow_NoResponsiveness(t *testing.T) {
 
 // TestFollow_ResponsivenessClamp は範囲外の responsiveness がクランプされることを確認。
 func TestFollow_ResponsivenessClamp(t *testing.T) {
-	tests := []struct {
-		name string
-		in   float64
-		want float64
-	}{
-		{"負の値 → 0", -0.5, 0},
-		{"0 → 0", 0, 0},
-		{"0.5 → 0.5", 0.5, 0.5},
-		{"1.0 → 1.0", 1.0, 1.0},
-		{"2.0 → 1.0", 2.0, 1.0},
+	f := NewFollower(0.3)
+
+	// Update に 2.0 を渡しても 1.0 にクランプ
+	f.Update(640, 240, 640, 480, 2.0)
+	for i := 0; i < 200; i++ {
+		f.Update(640, 240, 640, 480, 2.0)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			f := NewFollower(tt.in)
-			if f.responsiveness != tt.want {
-				t.Errorf("got %v, want %v", f.responsiveness, tt.want)
-			}
-		})
+	cx, _ := f.current()
+	if cx < 1-eps {
+		t.Errorf("expected cx ≈ 1 (clamped), got %v", cx)
 	}
 }

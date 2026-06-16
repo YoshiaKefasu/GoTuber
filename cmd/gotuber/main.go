@@ -14,6 +14,7 @@ import (
 	"github.com/YoshiaKefasu/GoTuber/internal/game"
 	"github.com/YoshiaKefasu/GoTuber/internal/killswitch"
 	"github.com/YoshiaKefasu/GoTuber/internal/mouse"
+	"github.com/YoshiaKefasu/GoTuber/internal/tweaks"
 	"github.com/hajimehoshi/ebiten/v2"
 )
 
@@ -70,7 +71,21 @@ func main() {
 		ScreenTransparent: true,
 	}
 
-	g := game.New(atlas, mouse.NewFollower(0.3), blink.New(), mover)
+	// フォントロード (Gen Interface JP Regular 6.1MB embedded)
+	face := tweaks.LoadFontFace(16)
+	log.Printf("font loaded: Gen Interface JP Regular (16px)")
+
+	// Tweaks パネル
+	tweaksState := tweaks.NewState()
+	panel := tweaks.NewPanel(face, tweaksState, mover != nil)
+	log.Printf("tweaks panel: F1 to toggle (audio checkbox: %s)", func() string {
+		if mover != nil {
+			return "enabled"
+		}
+		return "greyed (mic unavailable)"
+	}())
+
+	g := game.New(atlas, mouse.NewFollower(0.3), blink.New(), mover, panel, tweaksState)
 
 	// ゲームループ
 	// ebiten.Termination は kill switch 発火時の正常終了として扱う（終了コード 0）
