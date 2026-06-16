@@ -1,16 +1,15 @@
 # デフォルトキャラクター設定
-character:
-  name: "Default"
-  base_path: "assets/characters/_default"
-  ext: "png"
-  rows: 5
-  cols: 5
-  sheets:
-    eyes_open:
-      closed: "A"  # 目開け・口とじ
-      half: "B"    # 目開け・口中間
-      open: "C"     # 目開け・口開け
-    eyes_closed:
-      closed: "D"  # 目閉じ・口とじ
-      half: "E"    # 目閉じ・口中間
-      open: "F"     # 目閉じ・口開け
+# src/character-config.js と完全互換のキー名 (camelCase、Phase 1.12 で port)
+basePath: "assets/characters/_default"
+ext: "webp"  # デフォルト webp（元プロジェクトと同じ）
+rows: 5
+cols: 5
+sheets:
+  eyesOpen:
+    close: "A"
+    half: "B"
+    open: "C"
+  eyesClosed:
+    close: "D"
+    half: "E"
+    open: "F"

@@ -81,15 +81,10 @@ GoTuber は以下のオープンソースソフトウェアを利用していま
 
 ## Development Tools (Python)
 
-### Pillow — 10.4.0
-- **License**: HPND (Historical Permission Notice and Disclaimer)
-- **URL**: https://python-pillow.org/
-- **用途**: スプライトシート生成 (`tools/genplaceholder/`)
+スライスツール (`tools/slice_character_sheets.py`、Phase 1.12 で元 [tomari-guruguru](https://github.com/rotejin/tomari-guruguru) を MIT で継承) は Python 標準ライブラリのみ使用するため、Python パッケージ依存は **なし**。
 
-### numpy — 2.0.0
-- **License**: BSD 3-Clause
-- **URL**: https://numpy.org/
-- **用途**: 画像処理 (`tools/genplaceholder/`)
+外部依存ツール:
+- **ffmpeg / ffprobe** (必須、RubyVideo / ffmpeg.org) — ライセンス: GPL / LGPL (GoTuber にはバンドルせず、ユーザーが OS のパッケージマネージャで導入)
 
 ---
 

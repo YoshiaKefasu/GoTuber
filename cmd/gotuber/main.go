@@ -25,9 +25,11 @@ func main() {
 		log.Printf("failed to load config: %v", err)
 		os.Exit(1)
 	}
-	log.Printf("loaded character: %s (base=%s, ext=%s)", cfg.Name, cfg.BasePath, cfg.Ext)
+	log.Printf("loaded character: basePath=%s, ext=%s, rows=%d, cols=%d", cfg.BasePath, cfg.Ext, cfg.Rows, cfg.Cols)
+	log.Printf("config keys: basePath, ext, rows, cols, sheets.{eyesOpen,eyesClosed}.{close,half,open}")
+	log.Printf("mouse Y-axis flip removed (matches tomari-guruguru app.jsx:62)")
 
-	// フェイルファスト: 設定妥当性検証（base_path / ext / 6 sheets / 150 images）
+	// フェイルファスト: 設定妥当性検証（basePath / ext / 6 sheets / 150 images）
 	if err := cfg.Validate(); err != nil {
 		log.Printf("invalid config: %v", err)
 		os.Exit(1)

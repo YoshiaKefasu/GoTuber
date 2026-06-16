@@ -1,12 +1,10 @@
-# GoTuber Python tool dependencies
-#
-# tools/ 配下の Python スクリプト用。
-# インストール: pip install -r tools/requirements.txt
+# Python 依存 — GoTuber スライスツール用
 #
 # 注意: Phase 1 の動作 (Go バイナリ) には不要。スライスツール等を使う場合のみ。
+#
+# tools/slice_character_sheets.py (Phase 1.12 で元 tomari-guruguru を MIT 継承、648 行版)
+# は Python 標準ライブラリのみ使用するため、本来は requirements.txt は不要。
+# ただし、テストで pytest を使う場合は下記が必要。
 
-# スプライトシート分割 (tools/slice_character_sheets.py)
-Pillow==10.4.0
-
-# テスト実行 (任意、CI 用)
-pytest==8.0.0
+# スプライトシート分割 (tools/slice_character_sheets_test.py の pytest 実行用、任意)
+# pytest==8.3.2

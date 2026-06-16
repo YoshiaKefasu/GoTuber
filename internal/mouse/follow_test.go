@@ -57,7 +57,8 @@ func TestFollow_SmoothingConverges(t *testing.T) {
 }
 
 // TestFollow_CellMapping はウィンドウ四隅が正しいセルにマップされることを確認。
-// Y 軸反転のため: 左上 → (4, 0)、右下 → (0, 4)、中央 → (2, 2)。
+// Y 軸反転なし: 左上 → (0, 0)、右下 → (4, 4)、中央 → (2, 2)
+// (元 tomari-guruguru app.jsx:62 と一致)
 func TestFollow_CellMapping(t *testing.T) {
 	f := NewFollower(1.0) // 即追従でテスト
 
@@ -67,11 +68,11 @@ func TestFollow_CellMapping(t *testing.T) {
 		wantRow int
 		wantCol int
 	}{
-		{"左上 (mouse=0,0)", 0, 0, 4, 0},
+		{"左上 (mouse=0,0)", 0, 0, 0, 0},
 		{"中央 (mouse=320,240)", 320, 240, 2, 2},
-		{"右下 (mouse=640,480)", 640, 480, 0, 4},
-		{"左下 (mouse=0,480)", 0, 480, 0, 0},
-		{"右上 (mouse=640,0)", 640, 0, 4, 4},
+		{"右下 (mouse=640,480)", 640, 480, 4, 4},
+		{"左下 (mouse=0,480)", 0, 480, 4, 0},
+		{"右上 (mouse=640,0)", 640, 0, 0, 4},
 	}
 
 	for _, tt := range tests {

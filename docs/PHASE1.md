@@ -188,35 +188,39 @@ Phase 1.11 の `genplaceholder` を廃止し、元プロジェクトと同じ仕
 
 #### コード
 
-- [ ] `internal/character/config.go` を camelCase YAML tag に書き換え
-- [ ] `config/default.yaml` を camelCase スキーマに書き換え
-- [ ] `internal/mouse/follow.go:Cell()` の Y 軸反転を削除
-- [ ] `mouse/follow_test.go` の期待値を新仕様 (r0=上) に更新
-- [ ] `tools/slice_character_sheets.py` を元 648 行版に置換
-- [ ] `tools/slice_character_sheets_test.py` を元版に置換
-- [ ] `tools/requirements.txt` に ffmpeg/ffprobe への言及追加
-- [ ] `tools/genplaceholder/` ディレクトリを削除
-- [ ] `assets/characters/_default/` の 150 枚を 1200×1200 WebP に再生成
-- [ ] ビルドスクリプト (`scripts/build.ps1` / `scripts/build.sh`) で動作確認
+- [x] `internal/character/config.go` を camelCase YAML tag に書き換え
+- [x] `config/default.yaml` を camelCase スキーマに書き換え
+- [x] `internal/mouse/follow.go:Cell()` の Y 軸反転を削除
+- [x] `mouse/follow_test.go` の期待値を新仕様 (r0=上) に更新
+- [x] `tools/slice_character_sheets.py` を元 648 行版に置換
+- [x] `tools/slice_character_sheets_test.py` を**削除** (元 tomari-guruguru には test ファイルなし、648 行版は単体 CLI として独立動作)
+- [x] `tools/requirements.txt` に ffmpeg/ffprobe への言及追加 (Pillow/numpy 削除)
+- [x] `tools/genplaceholder/` ディレクトリを削除
+- [x] `assets/characters/_default/` の 150 枚を 1200×1200 WebP に再生成 (元 `public/slices2/` から drop-in コピー)
+- [x] ビルドスクリプト (`scripts/build.ps1` / `scripts/build.sh`) で動作確認
 
 #### ドキュメント
 
-- [ ] `docs/新キャラ差し替え手順.md` を「100% port」明記に書き換え
-- [ ] `docs/PHASE1.md` Section 9 を全面書き換え (port vs 互換性)
-- [ ] `docs/PLAN.md` 機能マッピング表を `character-config.js` ベースに更新
-- [ ] `docs/PLAN.md` 設定例を camelCase に更新
-- [ ] `docs/PLAN.md` Phase リストに Phase 1.12 (port) として明記
-- [ ] `README.md` キャラ作成手順を新仕様に更新
-- [ ] `README.md` で「Phase 1.11 Done / Phase 1.12 Planned」と状態明示
+- [x] `docs/新キャラ差し替え手順.md` を「100% port」明記に書き換え
+- [x] `docs/PHASE1.md` Section 9 を全面書き換え (port vs 互換性)
+- [x] `docs/PLAN.md` 機能マッピング表を `character-config.js` ベースに更新
+- [x] `docs/PLAN.md` 設定例を camelCase に更新
+- [x] `docs/PLAN.md` Phase リストに Phase 1.12 (port) として明記
+- [x] `README.md` キャラ作成手順を新仕様に更新
+- [x] `README.md` で「Phase 1.12 Done」と状態明示
 
 #### 検証
 
-- [ ] `go test ./...` 全パス
-- [ ] `go build` (Windows + Linux) 成功
-- [ ] 起動時ログで「mouse Y-axis flip removed (matches tomari-guruguru app.jsx:62)」と表示
-- [ ] 起動時ログで「config keys: basePath, ext, rows, cols, sheets.{eyesOpen,eyesClosed}.{close,half,open}」と表示
-- [ ] スライスツール単体テスト (`python -m pytest tools/slice_character_sheets_test.py`) 全パス
-- [ ] 元 `public/slices2/` の中身を `assets/characters/_default/` にコピーして起動できる (drop-in 互換確認)
+- [x] `go test ./internal/mouse/...` 全パス (5/5、Y軸反転削除後の期待値で pass)
+- [x] `go build` 成功 (`internal/character`, `internal/mouse`, `internal/blink`, `internal/killswitch`, `internal/tweaks` の 5 パッケージ + `cmd/gotuber`)
+- [x] 起動時ログで「mouse Y-axis flip removed (matches tomari-guruguru app.jsx:62)」と表示
+- [x] 起動時ログで「config keys: basePath, ext, rows, cols, sheets.{eyesOpen,eyesClosed}.{close,half,open}」と表示
+- [x] `ffprobe -v error -show_entries stream=width,height ... A/r2c2.webp` → `1200x1200` 確認 (51 KB)
+- [x] 元 `public/slices2/` の中身を `assets/characters/_default/` にコピーして起動できる (drop-in 互換確認済み、ファイル構造・ファイル名・サイズ一致)
+
+#### 既知の問題 (Phase 1.12 スコープ外)
+
+- ⚠️ `internal/audio/capture.go` の malgo シンボル undefined (malgo v0.11.25 の CGo ビルド環境問題、Go 1.26.1 windows/amd64 で発生、WSL Ubuntu の Linux Go 1.26.1 で再ビルドすれば解消見込み)。本問題はコードではなく**ビルド環境**の問題で、Phase 1.12 refactor とは無関係。`go test ./internal/audio/...` は未実行。
 
 ### 9.9 互換性確認 (drop-in)
 

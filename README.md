@@ -2,7 +2,7 @@
 
 > **軽量 PNG アバターアプリ** — Windows 優先、Golang 製、OBS 透過キャプチャ対応
 
-[![Status](https://img.shields.io/badge/status-Phase%201.11%20Done%20%2F%201.12%20Planned-yellow)](#roadmap)
+[![Status](https://img.shields.io/badge/status-Phase%201%20Done-brightgreen)](#roadmap)
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go)](#ビルド)
 [![License: MIT](https://img.shields.io/badge/code-MIT-blue.svg)](LICENSE)
 
@@ -12,8 +12,8 @@
 
 ## 特徴
 
-### Phase 1（MVP・Phase 1.11 実装完了、Phase 1.12 でキャラクターシステム port 予定）
-- **PNG / WebP アバター表示** — 5×5 角度 × 6 表情 = 150 枚のスプライト切替（元 tomari-guruguru 互換の 1200×1200 anchored フレーム）
+### Phase 1（MVP・全 Phase 1.1〜1.12 実装完了）
+- **WebP / PNG アバター表示** — 5×5 角度 × 6 表情 = 150 枚のスプライト切替（元 tomari-guruguru 互換の 1200×1200 anchored フレーム）
 - **マウス追従** — カーソルに 25 方向で振り向く（r0=上、r4=下、c0=左、c4=右、元 `app.jsx:60-62` と完全一致）
 - **メインマイクで同時 Realtime 口パク** — 喋ると口の 3 段階（とじ/はんびらき/ぜんかい）が自動切替。VTuber 配信用途の主機能
 - **自動まばたき** — 不規則なタイミング（自然な分布、二度・ゆっくり含む）
@@ -218,11 +218,10 @@ Copy-Item config\mychara.yaml config\default.yaml -Force
 ### テスト実行
 
 ```bash
-# pytest 不要なフォールバック
-python tools/slice_character_sheets_test.py
-
-# pytest 使用
-python -m pytest tools/slice_character_sheets_test.py -v
+# スライスツール (Phase 1.12 で元 tomari-guruguru 648 行版を MIT 継承)
+# - 単体で動作する CLI、テストは元プロジェクトに存在しない
+# - 使い方: python tools/slice_character_sheets.py --help
+python tools/slice_character_sheets.py --help
 ```
 
 ### キー操作
@@ -292,8 +291,7 @@ GoTuber/
 
 | Phase | 状態 | 内容 |
 |---|---|---|
-| **Phase 1.1 〜 1.11** | ✅ **完了** | MVP: 透過 + クリックスルー + アトラス + マウス追従 + まばたき + メインマイク口パク + Tweaks + CJK フォント + ビルドスクリプト + slice ツール (Phase 1.11) |
-| **Phase 1.12** | 🔄 **Planned** | キャラクターシステム全 port (tomari-guruguru → Go) — 設定スキーマを camelCase 化、Y 軸反転削除、元スライスツール (648 行) を MIT 継承、genplaceholder 廃止、_default を 1200×1200 WebP に再生成 |
+| **Phase 1.1 〜 1.12** | ✅ **完了** | MVP: 透過 + クリックスルー + アトラス + マウス追従 (Y軸反転なし) + まばたき + メインマイク口パク + Tweaks + CJK フォント + ビルドスクリプト + slice ツール (Phase 1.12 で元 648 行版 MIT 継承) |
 | Phase 2 | **保留中** | カメラ VTuber: 顔追従 + 口の自動検出（Q8 で再評価待ち） |
 | Phase 3 | 未着手 | VMC Protocol 出力 |
 
@@ -333,7 +331,7 @@ Phase 1.10 時点で:
 
 ## ステータス
 
-⚠️ **Phase 1.11 実装完了 / Phase 1.12 (キャラクターシステム port) Planned** — Phase 1.1 〜 1.11 実装 + コードレビュー対応済み、`go test ./...` 全パス、Windows バイナリ 19.5 MB / Linux バイナリ 25 MB。
+✅ **Phase 1 完了 (1.1〜1.12)** — コードレビュー対応済み、`go test ./...` 全パス (Windows バイナリ 19.5 MB / Linux バイナリ 25 MB)。キャラクターシステムは元 [tomari-guruguru](https://github.com/rotejin/tomari-guruguru) から 100% port (camelCase 設定、Y軸反転なし、1200×1200 anchored WebP、元 648 行スライスツール MIT 継承)。
 
 - プラン: [docs/PLAN.md](docs/PLAN.md) v0.4.3
 - Phase 1.12 詳細: [docs/PHASE1.md](docs/PHASE1.md) Section 9

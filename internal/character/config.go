@@ -1,4 +1,7 @@
 // Package character はキャラクター設定と画像読み込みを管理する。
+//
+// `src/character-config.js` の Go 移植版 (Phase 1.12 で完全 port)。
+// 設定スキーマ・キー名 (`basePath`/`eyesOpen`/`eyesClosed`/`close`) は元と完全互換。
 package character
 
 import (
@@ -12,9 +15,9 @@ import (
 )
 
 // Config は 1 キャラクター分の設定を表す。
+// src/character-config.js と完全互換のキー名 (camelCase YAML tags)。
 type Config struct {
-	Name     string `yaml:"name"`
-	BasePath string `yaml:"base_path"`
+	BasePath string `yaml:"basePath"`
 	Ext      string `yaml:"ext"`
 	Rows     int    `yaml:"rows"`
 	Cols     int    `yaml:"cols"`
@@ -22,16 +25,18 @@ type Config struct {
 }
 
 // Sheets は 6 状態（目 × 口）のシート名マッピング。
+// 元 `eyesOpen: { close, half, open }` / `eyesClosed: { close, half, open }` に対応。
 type Sheets struct {
-	EyesOpen   EyeMouthStates `yaml:"eyes_open"`
-	EyesClosed EyeMouthStates `yaml:"eyes_closed"`
+	EyesOpen   EyeMouthStates `yaml:"eyesOpen"`
+	EyesClosed EyeMouthStates `yaml:"eyesClosed"`
 }
 
 // EyeMouthStates は「目状態 × 口状態」の 3 値に対するシート名。
+// 元 character-config.js: `close: 'A'` に対応（`closed` ではなく `close`）。
 type EyeMouthStates struct {
-	Closed string `yaml:"closed"`
-	Half   string `yaml:"half"`
-	Open   string `yaml:"open"`
+	Close string `yaml:"close"`
+	Half  string `yaml:"half"`
+	Open  string `yaml:"open"`
 }
 
 // LoadConfig は YAML ファイルから設定を読み込む。
@@ -52,16 +57,22 @@ func LoadConfig(path string) (*Config, error) {
 		c.Cols = 5
 	}
 	if c.Ext == "" {
-		c.Ext = "png"
+		c.Ext = "webp"
 	}
 	return &c, nil
 }
 
+// Src は sheet/row/col から画像ファイルパスを生成する。
+// src/character-config.js:22-24 の `src(sheet, r, c)` メソッドの Go 移植。
+func (c *Config) Src(sheet string, r, col int) string {
+	return fmt.Sprintf("%s/%s/r%dc%d.%s", c.BasePath, sheet, r, col, c.Ext)
+}
+
 // SheetFor は目・口状態から対応するシート名（インデックス: 0-5）を返す。
-//   - sheetIdx: 0=EyesOpen.Closed, 1=EyesOpen.Half, 2=EyesOpen.Open,
-//     3=EyesClosed.Closed, 4=EyesClosed.Half, 5=EyesClosed.Open
+//   - sheetIdx: 0=EyesOpen.Close, 1=EyesOpen.Half, 2=EyesOpen.Open,
+//     3=EyesClosed.Close, 4=EyesClosed.Half, 5=EyesClosed.Open
 //   - eyesClosed: true (目閉じ) / false (目開け)
-//   - mouth: 0=Closed, 1=Half, 2=Open
+//   - mouth: 0=Close, 1=Half, 2=Open
 func (c *Config) SheetFor(eyesClosed bool, mouth int) (sheetName string, sheetIdx int) {
 	eyeMap := c.Sheets.EyesOpen
 	eyesClosedSuffix := 0
@@ -71,36 +82,36 @@ func (c *Config) SheetFor(eyesClosed bool, mouth int) (sheetName string, sheetId
 	}
 	switch mouth {
 	case 0:
-		return eyeMap.Closed, eyesClosedSuffix + 0
+		return eyeMap.Close, eyesClosedSuffix + 0
 	case 1:
 		return eyeMap.Half, eyesClosedSuffix + 1
 	case 2:
 		return eyeMap.Open, eyesClosedSuffix + 2
 	default:
-		return eyeMap.Closed, eyesClosedSuffix + 0
+		return eyeMap.Close, eyesClosedSuffix + 0
 	}
 }
 
 // SheetNames は LoadAll が使う 6 シートの名前を config から返す。
 func (c *Config) SheetNames() []string {
 	return []string{
-		c.Sheets.EyesOpen.Closed,
-		c.Sheets.EyesOpen.Half,
-		c.Sheets.EyesOpen.Open,
-		c.Sheets.EyesClosed.Closed,
-		c.Sheets.EyesClosed.Half,
-		c.Sheets.EyesClosed.Open,
+		c.Sheets.EyesOpen.Close,   // "A"
+		c.Sheets.EyesOpen.Half,    // "B"
+		c.Sheets.EyesOpen.Open,    // "C"
+		c.Sheets.EyesClosed.Close, // "D"
+		c.Sheets.EyesClosed.Half,  // "E"
+		c.Sheets.EyesClosed.Open,  // "F"
 	}
 }
 
 // Validate は設定の妥当性をフェイルファストで検証する。
-//   - base_path: 非空、`..` を **コンポーネント** として含まない、存在するディレクトリ
+//   - basePath: 非空、`..` を **コンポーネント** として含まない、存在するディレクトリ
 //   - ext: "png" または "webp"
 //   - 6 シートディレクトリ: 全て存在
 //   - 各シートの 25 枚画像: 全て存在（goroutine + semaphore で並列化）
 func (c *Config) Validate() error {
 	if c.BasePath == "" {
-		return fmt.Errorf("empty base_path")
+		return fmt.Errorf("empty basePath")
 	}
 	if c.Ext != "png" && c.Ext != "webp" {
 		return fmt.Errorf("invalid ext: %s (must be png or webp)", c.Ext)
@@ -110,20 +121,20 @@ func (c *Config) Validate() error {
 	// （"..backup" のような正規ディレクトリ名を誤検出しないため）
 	for _, part := range strings.Split(filepath.ToSlash(cleaned), "/") {
 		if part == ".." {
-			return fmt.Errorf("invalid base_path: %s (path traversal)", c.BasePath)
+			return fmt.Errorf("invalid basePath: %s (path traversal)", c.BasePath)
 		}
 	}
 	info, err := os.Stat(cleaned)
 	if err != nil {
-		return fmt.Errorf("base_path not accessible: %s (%w)", cleaned, err)
+		return fmt.Errorf("basePath not accessible: %s (%w)", cleaned, err)
 	}
 	if !info.IsDir() {
-		return fmt.Errorf("base_path is not a directory: %s", cleaned)
+		return fmt.Errorf("basePath is not a directory: %s", cleaned)
 	}
 	sheetNames := c.SheetNames()
 	for _, name := range sheetNames {
 		if name == "" {
-			return fmt.Errorf("empty sheet name in config (check eyes_open/eyes_closed mapping)")
+			return fmt.Errorf("empty sheet name in config (check eyesOpen/eyesClosed mapping)")
 		}
 		dir := filepath.Join(cleaned, name)
 		if _, err := os.Stat(dir); err != nil {
@@ -163,11 +174,11 @@ func (c *Config) Validate() error {
 
 // PathFor はシート・行・列から画像ファイルパスを生成する。
 //   - 範囲外: error
-//   - base_path に `..` を含む: error (path traversal 防止)
-//   - base_path が空: error
+//   - basePath に `..` を含む: error (path traversal 防止)
+//   - basePath が空: error
 func (c *Config) PathFor(sheet string, row, col int) (string, error) {
 	if c.BasePath == "" {
-		return "", fmt.Errorf("empty base_path")
+		return "", fmt.Errorf("empty basePath")
 	}
 	if row < 0 || row >= c.Rows {
 		return "", fmt.Errorf("row out of range: %d (rows=%d)", row, c.Rows)
@@ -177,7 +188,7 @@ func (c *Config) PathFor(sheet string, row, col int) (string, error) {
 	}
 	cleaned := filepath.Clean(c.BasePath)
 	if strings.Contains(cleaned, "..") {
-		return "", fmt.Errorf("invalid base_path: %s (contains ..)", c.BasePath)
+		return "", fmt.Errorf("invalid basePath: %s (contains ..)", c.BasePath)
 	}
 	return filepath.Join(cleaned, sheet, fmt.Sprintf("r%dc%d.%s", row, col, c.Ext)), nil
 }
