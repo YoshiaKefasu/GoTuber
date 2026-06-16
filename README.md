@@ -158,6 +158,15 @@ python tools/slice_character_sheets.py \
     --output-dir assets/characters/my_char
 ```
 
+**テスト実行**:
+```bash
+# pytest 不要なフォールバック
+python tools/slice_character_sheets_test.py
+
+# pytest 使用
+python -m pytest tools/slice_character_sheets_test.py -v
+```
+
 ### キー操作
 
 | キー | 動作 |

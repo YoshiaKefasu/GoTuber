@@ -34,6 +34,9 @@ from pathlib import Path
 from PIL import Image
 
 
+VALID_SHEETS = frozenset("ABCDEF")
+
+
 def slice_sheet(
     input_path: Path,
     output_dir: Path,
@@ -45,7 +48,7 @@ def slice_sheet(
     """
     1 枚のスプライトシートを rows × cols 個の個別 PNG に分割する。
 
-    戻り値: 実際に書き出したファイル数。
+    戻り値: 実際に書き出したファイル数 (既存 skip は 0)。
 
     セル座標系:
       row 0 がシート上端、col 0 が左端。
@@ -53,34 +56,35 @@ def slice_sheet(
     """
     if not input_path.exists():
         print(f"ERROR: input not found: {input_path}", file=sys.stderr)
-        return 0
-
-    img = Image.open(input_path)
-    expected_size = (cols * cell_size, rows * cell_size)
-    if img.size != expected_size:
-        print(
-            f"WARNING: {input_path} is {img.size}, expected {expected_size}. "
-            f"余白はクロップされます。",
-            file=sys.stderr,
-        )
+        return -1  # 負値で「input not found」を区別 (skip=0 と区別)
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    count = 0
-    for r in range(rows):
-        for c in range(cols):
-            # シートから該当セルを切り出し
-            left = c * cell_size
-            top = r * cell_size
-            right = left + cell_size
-            bottom = top + cell_size
-            cell = img.crop((left, top, right, bottom))
+    expected_size = (cols * cell_size, rows * cell_size)
+    # with 文で Image を確実に close (ファイルハンドルリーク防止)
+    with Image.open(input_path) as img:
+        if img.size != expected_size:
+            print(
+                f"WARNING: {input_path} is {img.size}, expected {expected_size}. "
+                f"余白はクロップされます。",
+                file=sys.stderr,
+            )
 
-            out_path = output_dir / f"r{r}c{c}.png"
-            if out_path.exists() and not overwrite:
-                continue
-            cell.save(out_path, "PNG")
-            count += 1
+        count = 0
+        for r in range(rows):
+            for c in range(cols):
+                # シートから該当セルを切り出し
+                left = c * cell_size
+                top = r * cell_size
+                right = left + cell_size
+                bottom = top + cell_size
+                cell = img.crop((left, top, right, bottom))
+
+                out_path = output_dir / f"r{r}c{c}.png"
+                if out_path.exists() and not overwrite:
+                    continue
+                cell.save(out_path, "PNG")
+                count += 1
 
     return count
 
@@ -99,7 +103,7 @@ def parse_sheet_pairs(spec: str) -> list[tuple[str, Path]]:
         sheet, path_str = chunk.split(":", 1)
         sheet = sheet.strip().upper()
         path = Path(path_str.strip())
-        if sheet not in "ABCDEF":
+        if sheet not in VALID_SHEETS:
             raise ValueError(f"invalid sheet name (expected A-F): {sheet!r}")
         pairs.append((sheet, path))
     return pairs
@@ -144,8 +148,14 @@ def main(argv: list[str] | None = None) -> int:
             rows=args.rows, cols=args.cols,
             cell_size=args.cell_size, overwrite=args.overwrite,
         )
-        print(f"OK: {args.input} -> {args.output} ({written} cells)")
-        return 0 if written > 0 else 1
+        if written < 0:
+            # input not found
+            return 1
+        if written == 0:
+            print(f"NO-OP: {args.input} -> {args.output} (全 25 ファイル既存、--overwrite で上書き)")
+        else:
+            print(f"OK: {args.input} -> {args.output} ({written} cells)")
+        return 0
 
     # input-sheet モード
     if not args.output_dir:
@@ -157,7 +167,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1
 
-    total = 0
+    total_written = 0
+    total_skipped = 0
     for sheet, path in pairs:
         out = args.output_dir / sheet
         written = slice_sheet(
@@ -165,11 +176,17 @@ def main(argv: list[str] | None = None) -> int:
             rows=args.rows, cols=args.cols,
             cell_size=args.cell_size, overwrite=args.overwrite,
         )
-        total += written
+        if written < 0:
+            # 1 シートでも input not found ならエラー
+            return 1
+        total_written += written
+        if written == 0:
+            total_skipped += 1
         print(f"OK: {sheet}: {path} -> {out} ({written} cells)")
 
-    print(f"Total: {total} cells written")
-    return 0 if total > 0 else 1
+    print(f"Total: {total_written} cells written, {total_skipped} sheets skipped (all files exist)")
+    # skip のみ (written=0) は exit 0、書き込みありも exit 0、input not found は 1
+    return 0
 
 
 if __name__ == "__main__":

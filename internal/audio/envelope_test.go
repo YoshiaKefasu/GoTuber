@@ -173,13 +173,14 @@ func TestRMS_Normalization(t *testing.T) {
 // TestDecodePCM16 はバイト列 → int16 変換の境界を確認。
 func TestDecodePCM16(t *testing.T) {
 	// 空
-	if got := decodePCM16([]byte{}); len(got) != 0 {
+	got := decodePCM16([]byte{})
+	if len(got) != 0 {
 		t.Errorf("expected empty for empty bytes, got %d samples", len(got))
-		releasePCMSamples(got)
 	}
+	releasePCMSamples(got) // 必ず release (規約統一)
 
 	// 2 バイト (1 sample) → 0x0001 = 1
-	got := decodePCM16([]byte{0x01, 0x00})
+	got = decodePCM16([]byte{0x01, 0x00})
 	if len(got) != 1 || got[0] != 1 {
 		t.Errorf("expected [1], got %v", got)
 	}
@@ -193,17 +194,38 @@ func TestDecodePCM16(t *testing.T) {
 	releasePCMSamples(got)
 }
 
-// TestDecodePCM16_PoolReuse は sync.Pool が slice を再利用することを確認。
+// TestDecodePCM16_PoolReuse は sync.Pool が slice を再利用する (backing array が同一) ことを確認。
+// 1) 同じサイズで取り出し→解放→再取り出しして &samples[0] 比較
+// 2) 容量不足時に新規確保されることを確認
 func TestDecodePCM16_PoolReuse(t *testing.T) {
-	// 同じサイズで複数回呼び出し、毎回動作することを確認
-	data := []byte{0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04, 0x00}
-	for i := 0; i < 100; i++ {
-		samples := decodePCM16(data)
-		if len(samples) != 4 {
-			t.Errorf("iteration %d: expected 4 samples, got %d", i, len(samples))
-		}
-		releasePCMSamples(samples)
+	data := []byte{0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04, 0x00} // 8B → 4 samples
+
+	// 1) Pool 再利用検証: backing array アドレス一致
+	s1 := decodePCM16(data)
+	if len(s1) != 4 {
+		t.Fatalf("first: expected 4 samples, got %d", len(s1))
 	}
+	addr1 := &s1[0]
+	releasePCMSamples(s1)
+	s2 := decodePCM16(data)
+	if len(s2) != 4 {
+		t.Fatalf("second: expected 4 samples, got %d", len(s2))
+	}
+	if &s2[0] != addr1 {
+		t.Errorf("pool did not reuse slice: s1 backing=%p, s2 backing=%p", addr1, &s2[0])
+	}
+	releasePCMSamples(s2)
+
+	// 2) 容量不足時に新規確保 (initial cap 1024 を超える)
+	big := make([]byte, 4096) // 2048 samples > initial 1024
+	sBig := decodePCM16(big)
+	if len(sBig) != 2048 {
+		t.Errorf("big: expected 2048 samples, got %d", len(sBig))
+	}
+	if cap(sBig) < 2048 {
+		t.Errorf("big: expected cap >= 2048, got %d", cap(sBig))
+	}
+	releasePCMSamples(sBig)
 }
 
 // TestMover_Update_NoAudio は audio なしで Update しても 0 を返すことを確認 (nil safety)。
