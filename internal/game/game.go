@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"time"
 
+	"github.com/YoshiaKefasu/GoTuber/internal/audio"
 	"github.com/YoshiaKefasu/GoTuber/internal/blink"
 	"github.com/YoshiaKefasu/GoTuber/internal/character"
 	"github.com/YoshiaKefasu/GoTuber/internal/killswitch"
@@ -24,16 +25,17 @@ type Game struct {
 	atlas       *character.Atlas
 	mouse       *mouse.Follower
 	blink       *blink.Scheduler
+	audio       *audio.Mover // nil 可（オーディオデバイスなし環境用）
 	firstUpdate bool
 
 	// 内部状態 (Update で更新、Draw で参照)
 	eyesClosed bool // blink scheduler から
-	mouthState int  // 0=closed (Phase 1.6: 固定), 1=half, 2=open (Phase 1.7 で更新)
+	mouthState int  // 0=closed, 1=half, 2=open (audio.Mover から)
 }
 
-// New は新しい Game を作成する。
-func New(atlas *character.Atlas, follower *mouse.Follower, blinkSch *blink.Scheduler) *Game {
-	return &Game{atlas: atlas, mouse: follower, blink: blinkSch, firstUpdate: true}
+// New は新しい Game を作成する。audioMover が nil でも動作する（口パク無効）。
+func New(atlas *character.Atlas, follower *mouse.Follower, blinkSch *blink.Scheduler, audioMover *audio.Mover) *Game {
+	return &Game{atlas: atlas, mouse: follower, blink: blinkSch, audio: audioMover, firstUpdate: true}
 }
 
 // Update は毎フレーム呼ばれる。
@@ -50,6 +52,11 @@ func (g *Game) Update() error {
 
 	// 自動まばたき更新
 	g.eyesClosed = g.blink.Update(time.Now())
+
+	// 口パク更新（audio デバイスがない場合はスキップ）
+	if g.audio != nil {
+		g.mouthState = g.audio.Update()
+	}
 
 	// kill switch
 	killswitch.Tick()

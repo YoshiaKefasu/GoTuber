@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 
+	"github.com/YoshiaKefasu/GoTuber/internal/audio"
 	"github.com/YoshiaKefasu/GoTuber/internal/blink"
 	"github.com/YoshiaKefasu/GoTuber/internal/character"
 	"github.com/YoshiaKefasu/GoTuber/internal/game"
@@ -44,6 +45,20 @@ func main() {
 	// OS シグナルハンドラ
 	killswitch.Install()
 
+	// マイクキャプチャ開始（失敗時は口パク無効で続行）
+	mover, err := audio.NewMover()
+	if err != nil {
+		log.Printf("audio init failed (continuing without mouth movement): %v", err)
+		mover = nil
+	} else if err := mover.Start(); err != nil {
+		log.Printf("audio start failed (continuing without mouth movement): %v", err)
+		mover.Stop()
+		mover = nil
+	} else {
+		defer mover.Stop()
+		log.Printf("audio started: 48kHz mono, mic-driven mouth movement active")
+	}
+
 	// ウィンドウ設定
 	ebiten.SetWindowTitle(game.WindowTitle())
 	ebiten.SetWindowSize(640, 480)
@@ -55,7 +70,7 @@ func main() {
 		ScreenTransparent: true,
 	}
 
-	g := game.New(atlas, mouse.NewFollower(0.3), blink.New())
+	g := game.New(atlas, mouse.NewFollower(0.3), blink.New(), mover)
 
 	// ゲームループ
 	// ebiten.Termination は kill switch 発火時の正常終了として扱う（終了コード 0）

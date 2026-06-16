@@ -112,14 +112,22 @@
 
 - **malgo 完結オーディオ（Phase 1 スコープ）**
 - malgo Capture モード（**入力のみ**。Duplex は Phase 1.5+ でファイル再生時に必要）
-- 入力形式: `malgo.FormatF32`、mono、48 kHz
-- エンベロープフォロワー: attack 0.6 / release tunable
-- 口パク閾値: `thHalf` / `thFull`（F32 [-1, 1] 較正）
-- 70ms ヒステリシス
+- 入力形式: `malgo.FormatS16`、mono、48 kHz
+- エンベロープフォロワー: attack 0.5 / release 0.05（立ち上がり速、減衰遅。自然な音声挙動）
+- 口パク閾値: 0.05 (closed→half) / 0.20 (half→open)（int16 [-1, 1] RMS 較正）
+- ヒステリシス: **±0.02 RMS 値デッドゾーン**（時間ベースではない）
+  - MouthClosed → MouthHalf: envelope > 0.07
+  - MouthHalf → MouthClosed: envelope < 0.03
+  - MouthHalf → MouthOpen:   envelope > 0.22
+  - MouthOpen → MouthHalf:   envelope < 0.18
+  - **Open→Closed 直接遷移なし**（必ず Half 経由。soft landing 設計）
 - **ファイル再生（mp3/wav/ogg）口パクは Phase 1.5+ で追加**（Q6 保留、ユーザー判断）
-- テスト: `internal/audio/envelope_test.go`
-  - `TestEnvelope_AttackRelease`: attack 0.6 / release tunable
-  - `TestEnvelope_Hysteresis70ms`: 70ms 未満の連続状態変化を無視
+- スレッド: audio スレッド (malgo callback) → `atomic.StoreUint64` → game スレッド → `atomic.LoadUint64`
+- フェイルセーフ: `audio.NewMover()` 失敗時（デバイスなし等）は mover=nil で続行、口パク無効
+- テスト: `internal/audio/envelope_test.go`（Phase 1.10 で追加）
+  - `TestEnvelope_AttackRelease`: attack 0.5 / release 0.05
+  - `TestMouth_Hysteresis`: closed↔half, half↔open の閾値検証
+  - `TestRMS_Normalization`: int16 → [0, 1] 変換
 
 ### Phase 1.8: Tweaks パネル + CJK フォント
 
