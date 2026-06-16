@@ -218,9 +218,14 @@ Phase 1.11 の `genplaceholder` を廃止し、元プロジェクトと同じ仕
 - [x] `ffprobe -v error -show_entries stream=width,height ... A/r2c2.webp` → `1200x1200` 確認 (51 KB)
 - [x] 元 `public/slices2/` の中身を `assets/characters/_default/` にコピーして起動できる (drop-in 互換確認済み、ファイル構造・ファイル名・サイズ一致)
 
-#### 既知の問題 (Phase 1.12 スコープ外)
+#### 既知の問題 → **解消済み**
 
-- ⚠️ `internal/audio/capture.go` の malgo シンボル undefined (malgo v0.11.25 の CGo ビルド環境問題、Go 1.26.1 windows/amd64 で発生、WSL Ubuntu の Linux Go 1.26.1 で再ビルドすれば解消見込み)。本問題はコードではなく**ビルド環境**の問題で、Phase 1.12 refactor とは無関係。`go test ./internal/audio/...` は未実行。
+- ✅ `internal/audio/capture.go` の malgo シンボル undefined は **解消**。
+  - **原因**: WSL でデフォルトの `go` が **Windows Go** (`C:\Program Files\Go\bin\go.exe`) を参照していたため、CGo の malgo シンボルが解決できなかった。
+  - **解決**: `/usr/local/go/bin/go` (Linux/amd64 Go 1.26.1) を明示的に使用。
+  - **build.sh 自動対応**: line 23-26 で `/usr/local/go/bin/go` を検出して PATH 先頭に追加する仕組みあり。
+  - **運用**: WSL からのビルドは `./scripts/build.sh` を使う (Linux Go 自動選択)。Windows native からのビルドは `scoop install mingw` 後に `.\scripts\build.ps1` を使う。
+- `go test ./internal/audio/...` 実行 → ok (cached、Phase 1.7 で実装済のテスト全パス)
 
 ### 9.9 互換性確認 (drop-in)
 
