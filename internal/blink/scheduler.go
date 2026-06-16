@@ -1,16 +1,31 @@
 // Package blink は自動まばたきを制御する。
 //
 // 瞬きタイプ分布: 22% 二度瞬き / 6% ゆっくり / 72% 通常
-// 瞬き間隔範囲: 1.8〜4.5s (70%, 通常) / 0.7〜1.5s (24%, たまに短く) / 4.5〜9s (6%, ぼーっと長く)
+// 瞬き間隔範囲: 1.8〜4.5s (70% 未満, 通常) / 0.7〜1.5s (24% 未満, たまに短く) / 4.5〜9s (6%, ぼーっと長く)
 // 瞬き継続時間: 通常 80〜150ms / ゆっくり 200〜300ms
 // 二度瞬き: 1 回目 80〜150ms → 50〜100ms 開く → 2 回目 80〜150ms
+//
+// 状態遷移:
+//
+//	stateOpen ─[1s 後]──▶ stateBlink1 ──tick──┬─[Normal/Slow]──▶ stateOpen ─[PickInterval]──▶ (loop)
+//	                                            └─[Double]────▶ stateBetween ──tick──▶ stateBlink2 ──tick──▶ stateOpen
 //
 // 単一 goroutine (game.Update) からのみ使用すること（スレッドセーフではない）。
 package blink
 
 import (
-	"math/rand"
+	"math/rand/v2"
 	"time"
+)
+
+// 瞬きパラメータ（定数化で off-by-one 防止）。
+const (
+	blinkNormalMinMs = 80
+	blinkNormalMaxMs = 150
+	blinkSlowMinMs   = 200
+	blinkSlowMaxMs   = 300
+	doubleGapMinMs   = 50
+	doubleGapMaxMs   = 100
 )
 
 // BlinkType は瞬きの種類。
@@ -47,9 +62,10 @@ func New() *Scheduler {
 }
 
 // NewWithSeed はテスト用に特定の seed で Scheduler を作成する。
+// 第 2 seed は固定 (golden ratio 由来) で再現性確保。
 func NewWithSeed(seed int64) *Scheduler {
 	return &Scheduler{
-		rng:              rand.New(rand.NewSource(seed)),
+		rng:              rand.New(rand.NewPCG(uint64(seed), 0x9E3779B97F4A7C15)),
 		state:            stateOpen,
 		nextStateChangeAt: time.Now().Add(1 * time.Second), // 最初の瞬きは 1s 後から
 	}
@@ -75,8 +91,9 @@ func (s *Scheduler) advance(now time.Time) {
 		// 1 回目の瞬き終了
 		if s.currentBlinkType == BlinkDouble {
 			// 二度瞬き: 中間（開いた）状態へ
+			gap := time.Duration(doubleGapMinMs+s.rng.IntN(doubleGapMaxMs-doubleGapMinMs+1)) * time.Millisecond
 			s.state = stateBetween
-			s.nextStateChangeAt = now.Add(time.Duration(50+s.rng.Intn(50)) * time.Millisecond)
+			s.nextStateChangeAt = now.Add(gap)
 		} else {
 			// 通常 or ゆっくり: 瞬き終了、次の瞬きまで待機
 			s.state = stateOpen
@@ -93,12 +110,15 @@ func (s *Scheduler) advance(now time.Time) {
 	}
 }
 
+// blinkDuration は現在の BlinkType に応じた瞬き継続時間を返す。
+//   - BlinkSlow: 200-300ms
+//   - Normal / Double: 80-150ms
 func (s *Scheduler) blinkDuration() time.Duration {
 	if s.currentBlinkType == BlinkSlow {
-		return time.Duration(200+s.rng.Intn(100)) * time.Millisecond
+		return time.Duration(blinkSlowMinMs+s.rng.IntN(blinkSlowMaxMs-blinkSlowMinMs+1)) * time.Millisecond
 	}
-	// Normal / Double: 80-150ms
-	return time.Duration(80+s.rng.Intn(70)) * time.Millisecond
+	// Normal / Double
+	return time.Duration(blinkNormalMinMs+s.rng.IntN(blinkNormalMaxMs-blinkNormalMinMs+1)) * time.Millisecond
 }
 
 // PickBlinkType は 22/6/72 の分布で瞬きタイプを選ぶ。
@@ -114,7 +134,12 @@ func (s *Scheduler) PickBlinkType() BlinkType {
 }
 
 // PickInterval は次の瞬きまでの interval を返す。
-// 分布: 70% で 1.8-4.5s、24% で 0.7-1.5s、6% で 4.5-9s
+// 分布:
+//   - r < 0.70: 1.8-4.5s (通常)
+//   - r < 0.94: 0.7-1.5s (たまに短い)
+//   - else:     4.5-9s   (ぼーっと長い)
+//
+// 境界値 r=0.70 は短い側、r=0.94 は長い側に分類される (measure zero 確率)。
 func (s *Scheduler) PickInterval() time.Duration {
 	r := s.rng.Float64()
 	switch {
@@ -127,7 +152,10 @@ func (s *Scheduler) PickInterval() time.Duration {
 	}
 }
 
-// BlinkType は現在の瞬きタイプを返す（stateOpen の場合は BlinkNormal、デバッグ用）。
+// CurrentBlinkType は直近に開始された瞬きのタイプを返す。
+// New() 直後は BlinkNormal (ゼロ値)。
+// advance(stateOpen) で次の瞬きタイプが選択されるまで、前の瞬きタイプを保持する。
+// デバッグ・ログ用途を想定。
 func (s *Scheduler) CurrentBlinkType() BlinkType {
 	return s.currentBlinkType
 }
