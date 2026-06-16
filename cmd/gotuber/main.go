@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 
+	"github.com/YoshiaKefasu/GoTuber/internal/blink"
 	"github.com/YoshiaKefasu/GoTuber/internal/character"
 	"github.com/YoshiaKefasu/GoTuber/internal/game"
 	"github.com/YoshiaKefasu/GoTuber/internal/killswitch"
@@ -54,7 +55,7 @@ func main() {
 		ScreenTransparent: true,
 	}
 
-	g := game.New(atlas, mouse.NewFollower(0.3))
+	g := game.New(atlas, mouse.NewFollower(0.3), blink.New())
 
 	// ゲームループ
 	// ebiten.Termination は kill switch 発火時の正常終了として扱う（終了コード 0）
