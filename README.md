@@ -215,7 +215,7 @@ Copy-Item config\mychara.yaml config\default.yaml -Force
 
 詳細な検証手順・コンポーネント mode の調整パラメータは [`docs/新キャラ差し替え手順.md`](docs/新キャラ差し替え手順.md) 参照。
 
-**AI 画像生成でキャラを作る場合**: [`docs/01_画像生成用プロンプト.txt`](docs/01_画像生成用プロンプト.txt) (元 [tomari-guruguru](https://github.com/rotejin/tomari-guruguru) を MIT 継承) に ChatGPT Images 2.0 用の 5×5 顔角度リファレンス生成プロンプト + 目/口の 6 表情差分プロンプト + ファイル命名規則を収録。
+**AI 画像生成でキャラを作る場合**: [`docs/01_画像生成用プロンプト.txt`](docs/01_画像生成用プロンプト.txt) (元 [tomari-guruguru](https://github.com/rotejin/tomari-guruguru) を MIT 継承) に ChatGPT Images 2.0 用の 5×5 顔角度リファレンス生成プロンプト + 目/口の 6 表情差分プロンプト + ファイル命名規則を収録。同梱の 5×5 テンプレート画像 [`docs/01_上半身_画像生成用テンプレ.png`](docs/01_上半身_画像生成用テンプレ.png) (4500×4500、GoTuber 作成者自作) を AI に添付して使用。
 
 ### テスト実行
 
