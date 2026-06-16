@@ -170,12 +170,12 @@ func TestRMS_Normalization(t *testing.T) {
 		t.Errorf("expected RMS=0 for empty input, got %v", rms)
 	}
 }
-
 // TestDecodePCM16 はバイト列 → int16 変換の境界を確認。
 func TestDecodePCM16(t *testing.T) {
 	// 空
 	if got := decodePCM16([]byte{}); len(got) != 0 {
 		t.Errorf("expected empty for empty bytes, got %d samples", len(got))
+		releasePCMSamples(got)
 	}
 
 	// 2 バイト (1 sample) → 0x0001 = 1
@@ -183,11 +183,26 @@ func TestDecodePCM16(t *testing.T) {
 	if len(got) != 1 || got[0] != 1 {
 		t.Errorf("expected [1], got %v", got)
 	}
+	releasePCMSamples(got)
 
 	// 4 バイト (2 samples) → [0x0001, 0x8000] = [1, -32768]
 	got = decodePCM16([]byte{0x01, 0x00, 0x00, 0x80})
 	if len(got) != 2 || got[0] != 1 || got[1] != -32768 {
 		t.Errorf("expected [1, -32768], got %v", got)
+	}
+	releasePCMSamples(got)
+}
+
+// TestDecodePCM16_PoolReuse は sync.Pool が slice を再利用することを確認。
+func TestDecodePCM16_PoolReuse(t *testing.T) {
+	// 同じサイズで複数回呼び出し、毎回動作することを確認
+	data := []byte{0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04, 0x00}
+	for i := 0; i < 100; i++ {
+		samples := decodePCM16(data)
+		if len(samples) != 4 {
+			t.Errorf("iteration %d: expected 4 samples, got %d", i, len(samples))
+		}
+		releasePCMSamples(samples)
 	}
 }
 

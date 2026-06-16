@@ -216,3 +216,90 @@
 - 元口パク: `../tomari-guruguru/src/talk-app.jsx`
 - 元まばたき: `../tomari-guruguru/src/app.jsx`（74〜110 行目）
 - Ebitengine Issue #3222: https://github.com/hajimehoshi/ebiten/issues/3222
+
+---
+
+## 9. Phase 1.11: Polish 適用 + slice_character_sheets.py 実装
+
+Phase 1.10 完了後に残っていた deferred Polish と、未実装だった `tools/slice_character_sheets.py` を実装。
+
+### 9.1 tools/slice_character_sheets.py
+
+5×5 が並んだ 1 枚のスプライトシート PNG を 25 枚の個別 PNG に分割する Python ツール。元 tomari-guruguru 由来の設計を踏襲、MIT 継承。
+
+**機能**:
+- 単一シート分割 (`--input` / `--output`)
+- 6 シート一括分割 (`--input-sheet "A:path1,B:path2,..."` / `--output-dir`)
+- セルサイズ可変 (`--cell-size`, default 100px)
+- 既存ファイルスキップ (default) / `--overwrite` で上書き
+- シートサイズ警告（想定外サイズでも継続、余白はクロップ）
+
+**出力構造**:
+```
+<output>/A/r0c0.png ... A/r4c4.png  (25 枚)
+<output>/B/...
+...
+<output>/F/...
+```
+
+**使用方法**:
+```bash
+# インストール
+pip install -r tools/requirements.txt
+
+# 単一シート分割 (sheet_A.png 500x500 を A ディレクトリに)
+python tools/slice_character_sheets.py \
+    --input sheet_A.png --output assets/characters/my_char/A
+
+# 6 シート一括 (A-F)
+python tools/slice_character_sheets.py \
+    --input-sheet "A:sheet_A.png,B:sheet_B.png,C:sheet_C.png,D:sheet_D.png,E:sheet_E.png,F:sheet_F.png" \
+    --output-dir assets/characters/my_char
+```
+
+**テスト** (8 件):
+- `test_slice_sheet_creates_25_files`: 5×5 → 25 枚分割
+- `test_slice_sheet_preserves_cell_content`: 分割後のセル色が元シートと一致
+- `test_slice_sheet_skip_existing`: 既存ファイルは上書きしない
+- `test_slice_sheet_overwrite`: --overwrite で上書き
+- `test_parse_sheet_pairs`: SHEET:PATH パース
+- `test_parse_sheet_pairs_invalid_sheet`: 不正シート名でエラー
+- `test_main_single_file`: CLI 単一ファイルモード E2E
+- `test_main_multi_file`: CLI 複数ファイルモード E2E
+
+実行: `python tools/slice_character_sheets_test.py` (pytest 不要のフォールバック)
+または: `python -m pytest tools/slice_character_sheets_test.py -v`
+
+### 9.2 適用した Polish
+
+| フェーズ | 内容 | ファイル |
+|---|---|---|
+| Phase 1.6 | `decodePCM16` の `sync.Pool` 化 (GC 圧削減) | `internal/audio/capture.go` |
+| Phase 1.6 | `releasePCMSamples` ヘルパー追加、テストでプールに戻す | `internal/audio/capture.go`, `envelope_test.go` |
+| Phase 1.6 | テスト追加: `TestDecodePCM16_PoolReuse` (100 回ループ) | `internal/audio/envelope_test.go` |
+| Phase 1.8 | Slider 値域の定数化 (`sliderMin`, `sliderMax`) | `internal/tweaks/panel.go` |
+| Phase 1.8 | `clampInt` ヘルパー追加、初期値計算の重複削除 | `internal/tweaks/panel.go` |
+| Phase 1.8 | テスト追加: `TestNewPanel`, `TestNewPanel_NoAudio`, `TestClampInt`, `TestSliderConstants` | `internal/tweaks/panel_test.go` |
+
+### 9.3 未着手の Polish (Phase 1.10 で deferred のまま)
+
+| 項目 | 理由 | 対応方針 |
+|---|---|---|
+| decodePCM16 ステレオ対応 | Phase 1 はモノラルのみ (malgo config channels=1) | 不要 (仕様外) |
+| エンベロープ period size 実測 | ハードウェア依存、視覚テスト時に確認 | Phase 2 以降 |
+| フォントサイズ可変化 (Tweaks) | UI 設計判断が必要 | 需要が出たら |
+| Audio checkbox グレー表示の視覚確認 | 実機実行で確認 | ユーザー視覚テスト時 |
+| i18n (gotext) | Phase 1 は英語ラベルのみ | 需要が出たら Phase 2 以降 |
+| State setter パターン | 単一 goroutine 前提が現状適切 | mutex 化が必要になったら |
+| mutex 化 | 単一 goroutine で十分 | 並行アクセス必要時 |
+| Mouse クリックスルー ↔ window placement | 現状で動作している | 必要時のみ |
+
+### 9.4 Phase 1.11 完了条件
+
+- [x] `tools/slice_character_sheets.py` 実装 (180 行)
+- [x] `tools/slice_character_sheets_test.py` 8 テスト
+- [x] `internal/audio`: sync.Pool 化
+- [x] `internal/tweaks`: slider 定数化 + clampInt
+- [x] `internal/tweaks/panel_test.go`: 4 テスト追加
+- [x] `go test ./...` 全 pass
+- [x] Windows + Linux ビルド成功

@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"sync"
 	"sync/atomic"
 
 	"github.com/gen2brain/malgo"
@@ -46,6 +47,8 @@ func NewCapture() (*Capture, error) {
 		samples := decodePCM16(pInput)
 		rms := computeRMS(samples)
 		atomic.StoreUint64(&c.rmsBits, math.Float64bits(rms))
+		// サンプル slice をプールに戻す (GC 圧削減)
+		releasePCMSamples(samples)
 	}
 
 	device, err := malgo.InitDevice(ctx.Context, deviceConfig, malgo.DeviceCallbacks{
@@ -85,14 +88,44 @@ func (c *Capture) GetRMS() float64 {
 	return math.Float64frombits(bits)
 }
 
+// pcmSamplePool は decodePCM16 の []int16 slice をプールして GC 圧を削減する。
+// malgo コールバックは ~47 Hz (48kHz / 1024 frame) で発火するため、毎回 make すると GC が頻発する。
+var pcmSamplePool = sync.Pool{
+	New: func() any {
+		s := make([]int16, 0, 1024)
+		return &s
+	},
+}
+
 // decodePCM16 はリトルエンディアン int16 PCM バイト列をサンプル配列に変換する。
 // モノラル (channels=1) 専用。ステレオ入力が必要な場合は per-channel 処理を追加すること。
+// 内部で sync.Pool を使い、[]int16 の割当を抑える。
 func decodePCM16(data []byte) []int16 {
-	samples := make([]int16, len(data)/2)
+	n := len(data) / 2
+	pooled := pcmSamplePool.Get().(*[]int16)
+	if cap(*pooled) < n {
+		// 容量不足なら新規スライス (古いものは GC)
+		s := make([]int16, n)
+		*pooled = s
+	} else {
+		*pooled = (*pooled)[:n]
+	}
+	samples := *pooled
 	for i := range samples {
 		samples[i] = int16(binary.LittleEndian.Uint16(data[i*2 : i*2+2]))
 	}
+	// 使用後はプールに戻す (computeRMS で使い終わったら呼ぶ)
 	return samples
+}
+
+// releasePCMSamples は decodePCM16 で取得したスライスをプールに戻す。
+// RMS 計算後に必ず呼ぶこと。
+func releasePCMSamples(samples []int16) {
+	if samples == nil {
+		return
+	}
+	pooled := samples[:0]
+	pcmSamplePool.Put(&pooled)
 }
 
 // computeRMS は int16 サンプル列の RMS を [0, 1] で返す。

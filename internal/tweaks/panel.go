@@ -10,6 +10,24 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/text/v2"
 )
 
+// Mouse follow スライダーの値域 (int、表示用)。
+// 内部表現 MouseResponsiveness は 0.0-1.0 で保持し、スライダー値 = int * 100 で換算する。
+const (
+	sliderMin = 5    // 0.05 * 100
+	sliderMax = 100  // 1.0 * 100
+)
+
+// clampInt は v を [lo, hi] にクランプする。
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
 // Panel は Tweaks パネルの ebitenui UI 実装。
 type Panel struct {
 	ui    *ebitenui.UI
@@ -57,17 +75,11 @@ func NewPanel(face *text.GoTextFace, state *State, audioEnabled bool) *Panel {
 		widget.TextOpts.Text("Mouse Follow", facePtr, labelColorIdle),
 	))
 
-	// --- Mouse Responsiveness スライダー (0-100 スケール) ---
-	initialResp := int(state.MouseResponsiveness * 100)
-	if initialResp < 5 {
-		initialResp = 5
-	}
-	if initialResp > 100 {
-		initialResp = 100
-	}
+	// --- Mouse Responsiveness スライダー (int 0-100 スケール、内部で /100.0) ---
+	initialResp := clampInt(int(state.MouseResponsiveness*100), sliderMin, sliderMax)
 	slider := widget.NewSlider(
 		widget.SliderOpts.Orientation(widget.DirectionHorizontal),
-		widget.SliderOpts.MinMax(5, 100),
+		widget.SliderOpts.MinMax(sliderMin, sliderMax),
 		widget.SliderOpts.InitialCurrent(initialResp),
 		widget.SliderOpts.WidgetOpts(widget.WidgetOpts.MinSize(200, 16)),
 		widget.SliderOpts.Images(

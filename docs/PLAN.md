@@ -577,6 +577,7 @@ Phase 1 を以下の順序で進める。各ステップ完了時にコミット
 8. **Phase 1.8**: Tweaks パネル（ebitenui）+ CJK フォント埋め込み（英語ラベル）
 9. **Phase 1.9**: ビルドスクリプト（`build.ps1` / `build.sh` / `dev.*`）+ Windows + Linux 動作確認
 10. **Phase 1.10**: README + LICENSE + `tools/requirements.txt` + `tools/LICENSE-third-party` + `docs/PHASE1.md` + **`go test ./...` 全パス確認**
+11. **Phase 1.11**: Polish 適用 (decodePCM16 sync.Pool、Slider 定数化、clampInt) + **`tools/slice_character_sheets.py`** 実装 (5×5 シート → 25 枚分割、MIT 継承) + テスト 8 件
 
 ---
 

@@ -142,7 +142,21 @@ go test ./... -v -race         # verbose + race detector
 3. `config/default.yaml` の `base_path` を変更
 4. または `config/<your-character>.yaml` を作成
 
-スライス生成は `tools/slice_character_sheets.py`（MIT 継承）または手動。
+スライス生成は `tools/slice_character_sheets.py` (Phase 1.11 実装、MIT 継承)。
+
+```bash
+# インストール
+pip install -r tools/requirements.txt
+
+# 単一シート分割
+python tools/slice_character_sheets.py \
+    --input sheet_A.png --output assets/characters/my_char/A
+
+# 6 シート一括
+python tools/slice_character_sheets.py \
+    --input-sheet "A:sheet_A.png,B:sheet_B.png,C:sheet_C.png,D:sheet_D.png,E:sheet_E.png,F:sheet_F.png" \
+    --output-dir assets/characters/my_char
+```
 
 ### キー操作
 
@@ -191,7 +205,7 @@ GoTuber/
 │   └── default.yaml         # デフォルトキャラ設定
 ├── tools/
 │   ├── genplaceholder/      # プレースホルダ生成 (Phase 1.3)
-│   ├── slice_character_sheets.py  # (Phase 1.5+: 自前スライス用)
+│   ├── slice_character_sheets.py  # 5×5 スプライトシート分割 (Phase 1.11)
 │   ├── requirements.txt     # Python 依存
 │   └── LICENSE-third-party  # 依存ライセンス一覧
 ├── docs/                    # 設計ドキュメント
@@ -212,7 +226,7 @@ GoTuber/
 
 | Phase | 状態 | 内容 |
 |---|---|---|
-| **Phase 1** | ✅ **完了** | MVP: 透過 + クリックスルー + アトラス + マウス追従 + まばたき + メインマイク口パク + Tweaks + CJK フォント + ビルドスクリプト |
+| **Phase 1** | ✅ **完了** | MVP: 透過 + クリックスルー + アトラス + マウス追従 + まばたき + メインマイク口パク + Tweaks + CJK フォント + ビルドスクリプト + slice ツール (Phase 1.11) |
 | Phase 2 | **保留中** | カメラ VTuber: 顔追従 + 口の自動検出（Q8 で再評価待ち） |
 | Phase 3 | 未着手 | VMC Protocol 出力 |
 

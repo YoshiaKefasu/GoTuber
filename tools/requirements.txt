@@ -1,7 +1,13 @@
 # GoTuber Python tool dependencies
 #
-# tools/genplaceholder 用の依存。
+# tools/ 配下の Python スクリプト用。
 # インストール: pip install -r tools/requirements.txt
+#
+# 注意: Phase 1 の動作 (Go バイナリ) には不要。スライスツール等を使う場合のみ。
 
+# スプライトシート分割 (tools/slice_character_sheets.py)
 Pillow==10.4.0
-numpy==2.0.0
+
+# テスト実行 (任意、CI 用)
+pytest==8.0.0
+numpy==2.0.0  # 将来の画像処理拡張用 (Phase 1 では未使用)

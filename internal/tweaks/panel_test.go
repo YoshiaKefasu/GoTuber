@@ -62,3 +62,70 @@ func TestLoadFontFace(t *testing.T) {
 		t.Errorf("expected Size=16, got %v", face.Size)
 	}
 }
+
+// TestNewPanel は NewPanel が panic せず Panel を返すことを確認。
+// ebitenui の widget ツリー構築は ebiten context 不要 (NewPanel 時点では)。
+func TestNewPanel(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("NewPanel panicked: %v", r)
+		}
+	}()
+	face := LoadFontFace(16)
+	state := NewState()
+	panel := NewPanel(face, state, true)
+	if panel == nil {
+		t.Errorf("expected non-nil panel")
+	}
+}
+
+// TestNewPanel_NoAudio は audioEnabled=false でも Panel が構築できることを確認。
+func TestNewPanel_NoAudio(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("NewPanel panicked: %v", r)
+		}
+	}()
+	face := LoadFontFace(16)
+	state := NewState()
+	panel := NewPanel(face, state, false)
+	if panel == nil {
+		t.Errorf("expected non-nil panel even without audio")
+	}
+}
+
+// TestClampInt はクランプロジックの境界確認。
+func TestClampInt(t *testing.T) {
+	tests := []struct {
+		name           string
+		v, lo, hi, exp int
+	}{
+		{"in range", 50, 5, 100, 50},
+		{"below lo", 0, 5, 100, 5},
+		{"above hi", 150, 5, 100, 100},
+		{"at lo", 5, 5, 100, 5},
+		{"at hi", 100, 5, 100, 100},
+		{"negative", -10, 0, 10, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := clampInt(tt.v, tt.lo, tt.hi)
+			if got != tt.exp {
+				t.Errorf("clampInt(%d, %d, %d) = %d, want %d", tt.v, tt.lo, tt.hi, got, tt.exp)
+			}
+		})
+	}
+}
+
+// TestSliderConstants はスライダー定数の値域確認。
+func TestSliderConstants(t *testing.T) {
+	if sliderMin >= sliderMax {
+		t.Errorf("sliderMin (%d) should be < sliderMax (%d)", sliderMin, sliderMax)
+	}
+	if sliderMin < 1 || sliderMin > 10 {
+		t.Errorf("sliderMin (%d) should be in 1-10 (representing 0.01-0.10 of MouseResponsiveness)", sliderMin)
+	}
+	if sliderMax != 100 {
+		t.Errorf("sliderMax (%d) should be 100 (representing 1.0)", sliderMax)
+	}
+}
