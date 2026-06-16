@@ -2,7 +2,7 @@
 
 > **軽量 PNG アバターアプリ** — Windows 優先、Golang 製、OBS 透過キャプチャ対応
 
-[![Status](https://img.shields.io/badge/status-Phase%201%20Done-brightgreen)](#roadmap)
+[![Status](https://img.shields.io/badge/status-Phase%201.11%20Done%20%2F%201.12%20Planned-yellow)](#roadmap)
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go)](#ビルド)
 [![License: MIT](https://img.shields.io/badge/code-MIT-blue.svg)](LICENSE)
 
@@ -12,9 +12,9 @@
 
 ## 特徴
 
-### Phase 1（MVP・実装完了）
-- **PNG アバター表示** — 5×5 角度 × 6 表情 = 150 枚のスプライト切替
-- **マウス追従** — カーソルに 25 方向で振り向く
+### Phase 1（MVP・Phase 1.11 実装完了、Phase 1.12 でキャラクターシステム port 予定）
+- **PNG / WebP アバター表示** — 5×5 角度 × 6 表情 = 150 枚のスプライト切替（元 tomari-guruguru 互換の 1200×1200 anchored フレーム）
+- **マウス追従** — カーソルに 25 方向で振り向く（r0=上、r4=下、c0=左、c4=右、元 `app.jsx:60-62` と完全一致）
 - **メインマイクで同時 Realtime 口パク** — 喋ると口の 3 段階（とじ/はんびらき/ぜんかい）が自動切替。VTuber 配信用途の主機能
 - **自動まばたき** — 不規則なタイミング（自然な分布、二度・ゆっくり含む）
 - **透過背景ウィンドウ** — OBS でウィンドウキャプチャするだけ（クロマキー不要）
@@ -22,6 +22,7 @@
 - **Tweaks パネル** — 追従速度・自動まばたき ON/OFF・口パク ON/OFF を `F1` キーまたは Quit ボタンで操作
 - **CJK フォント埋め込み** — Gen Interface JP Regular (Inter + Noto Sans JP) をバイナリ同梱
 - **Kill Switch** — `Esc` キー / `Q` キー / `Ctrl+C` / Tweaks の Quit ボタン で即終了
+- **元 `src/character-config.js` 互換** — `basePath`, `eyesOpen`, `eyesClosed`, `close` の camelCase キー (Phase 1.12 で port)
 
 > **Phase 1 スコープ外**（Phase 1.5+ で再評価）: 音声ファイル口パク（mp3/wav/ogg）
 
@@ -85,7 +86,7 @@
   - Windows: `scoop install mingw` または MSVC Build Tools
   - WSL: `sudo apt install gcc libasound2-dev build-essential`
 - Phase 2 以降: OpenCV 4.13.0（gocv v0.43.0 要件）
-- Python 3 + Pillow, numpy（スライス生成時のみ）— `pip install -r tools/requirements.txt`
+- Python 3（スライス生成時のみ、純粋な標準ライブラリのみ使用、ffmpeg/ffprobe が必要）— `pip install -r tools/requirements.txt`
 
 ### ビルド
 
@@ -133,32 +134,89 @@ go test ./... -v -race         # verbose + race detector
 - `E` (eyes_closed + mouth_half)
 - `F` (eyes_closed + mouth_open)
 
-各シートの画像フォーマット: `r{0-4}c{0-4}.png`（5行 × 5列 = 25枚）
+各シートの画像フォーマット: `r{0-4}c{0-4}.{png|webp}`（5行 × 5列 = 25枚）
 
-### 自分のキャラを追加
+行/列の向き (元 tomari-guruguru と同じ):
+- `r0` = 上を見る、`r4` = 下を見る
+- `c0` = 左を見る、`c4` = 右を見る
 
-1. 5×5×6 = 150 枚の PNG を用意
-2. ディレクトリ: `assets/characters/<your-character>/{A-F}/r{0-4}c{0-4}.png`
-3. `config/default.yaml` の `base_path` を変更
-4. または `config/<your-character>.yaml` を作成
+### 自分のキャラを作る (推奨フロー)
 
-スライス生成は `tools/slice_character_sheets.py` (Phase 1.11 実装、MIT 継承)。
+元プロジェクト [tomari-guruguru](https://github.com/rotejin/tomari-guruguru) と完全互換のフロー。詳細手順は `docs/新キャラ差し替え手順.md` 参照。
+
+**1. 6 枚の素材画像を用意** (各 4500×4500px、5×5 グリッド、1 コマ 900×900px):
+
+| シート | 目 | 口 | ファイル名例 |
+|---|---|---|---|
+| A | 開け | とじ | `A_目開け_口とじ.png` |
+| B | 開け | 中間 | `B_目開け_口中間.png` |
+| C | 開け | 開け | `C_目開け_口開け.png` |
+| D | 閉じ | とじ | `D_目閉じ_口とじ.png` |
+| E | 閉じ | 中間 | `E_目閉じ_口中間.png` |
+| F | 閉じ | 開け | `F_目閉じ_口開け.png` |
+
+**2. スライスツールで component mode 切り出し** (髪のはみ出しを保持):
 
 ```bash
 # インストール
 pip install -r tools/requirements.txt
+# ffmpeg / ffprobe（必須、全 OS）
+brew install ffmpeg            # macOS
+sudo apt install ffmpeg        # Ubuntu / Debian
+# Windows: https://www.gyan.dev/ffmpeg/builds/ から DL し PATH に追加
 
-# 単一シート分割
+# 6 シート一括スライス
 python tools/slice_character_sheets.py \
-    --input sheet_A.png --output assets/characters/my_char/A
-
-# 6 シート一括
-python tools/slice_character_sheets.py \
-    --input-sheet "A:sheet_A.png,B:sheet_B.png,C:sheet_C.png,D:sheet_D.png,E:sheet_E.png,F:sheet_F.png" \
-    --output-dir assets/characters/my_char
+  --source "新キャラ資料" \
+  --slices-out "assets/characters/mychara" \
+  --format webp \
+  --component-mode \
+  --remove-gray-residue \
+  --alpha-threshold 64
 ```
 
-**テスト実行**:
+→ `assets/characters/mychara/{A-F}/r{0-4}c{0-4}.webp` (150 枚) 出力。
+
+**3. 設定ファイル作成** (`config/mychara.yaml`)。**`src/character-config.js` と完全互換の camelCase キー**:
+
+```yaml
+# src/character-config.js と完全互換のキー名
+basePath: "assets/characters/mychara"
+ext: "webp"  # デフォルト webp（元プロジェクトと同じ）
+rows: 5
+cols: 5
+sheets:
+  eyesOpen:
+    close: "A"
+    half: "B"
+    open: "C"
+  eyesClosed:
+    close: "D"
+    half: "E"
+    open: "F"
+```
+
+**4. 起動** (Phase 1.12 時点):
+
+```powershell
+# パターン A: 既存 default.yaml の basePath を書き換える（最も簡単）
+notepad config\default.yaml
+# basePath: "assets/characters/mychara" に変更して保存
+.\bin\gotuber.exe
+
+# パターン B: 新しい設定ファイルを作って default.yaml と差し替える
+Copy-Item config\mychara.yaml config\default.yaml -Force
+.\bin\gotuber.exe
+```
+
+> **注**: Phase 1.11 までは `-config` フラグで任意 YAML を指定できる想定でしたが、
+> main.go は `config/default.yaml` を直接読む実装のため、当面は default.yaml を
+> 切り替える運用です。複数キャラ対応は Phase 1.12 完了後に再評価。
+
+詳細な検証手順・コンポーネント mode の調整パラメータは [`docs/新キャラ差し替え手順.md`](docs/新キャラ差し替え手順.md) 参照。
+
+### テスト実行
+
 ```bash
 # pytest 不要なフォールバック
 python tools/slice_character_sheets_test.py
@@ -196,32 +254,31 @@ GoTuber/
 │   │   ├── capture.go       # malgo mic capture
 │   │   ├── envelope.go      # attack/release + ヒステリシス口パク
 │   │   └── mover.go         # 高レベル facade
-│   ├── character/           # アトラス + 設定 + バリデーション
-│   ├── mouse/               # マウス追従 (5×5 グリッド)
+│   ├── character/           # アトラス + 設定 + バリデーション (Phase 1.12 で port)
+│   ├── mouse/               # マウス追従 (5×5 グリッド、r0=上)
 │   ├── blink/               # 自動まばたき (22/6/72 分布)
 │   ├── tweaks/              # Tweaks パネル (ebitenui + CJK フォント)
 │   │   ├── font.go          # //go:embed で TTF 埋め込み
 │   │   ├── panel.go         # ebitenui UI
 │   │   ├── state.go         # パネル状態
 │   │   └── assets/fonts/    # Gen Interface JP Regular.ttf
-│   ├── killswitch/          # SIGINT + Esc
-│   └── character/           # アトラス + 設定
+│   └── killswitch/          # SIGINT + Esc
 ├── assets/
 │   ├── characters/          # デフォルトキャラ + ユーザー配置先
-│   │   └── _default/        # 6 シート × 25 枚 = 150 プレースホルダ
+│   │   └── _default/        # 6 シート × 25 枚 = 150 プレースホルダ (Phase 1.12 で WebP 化)
 │   └── (Tweaks フォントは internal/tweaks/assets/ 配下)
 ├── config/
-│   └── default.yaml         # デフォルトキャラ設定
+│   └── default.yaml         # デフォルトキャラ設定 (camelCase, character-config.js 互換)
 ├── tools/
-│   ├── genplaceholder/      # プレースホルダ生成 (Phase 1.3)
-│   ├── slice_character_sheets.py  # 5×5 スプライトシート分割 (Phase 1.11)
+│   ├── slice_character_sheets.py  # 元 tomari-guruguru を MIT 継承 (Phase 1.12)
 │   ├── requirements.txt     # Python 依存
 │   └── LICENSE-third-party  # 依存ライセンス一覧
 ├── docs/                    # 設計ドキュメント
 │   ├── PLAN.md              # 全体設計 (v0.4.3)
 │   ├── PHASE1.md            # Phase 1 詳細設計
 │   ├── PHASE2.md            # Phase 2 詳細設計 (保留中)
-│   └── PHASE3.md            # Phase 3 詳細設計
+│   ├── PHASE3.md            # Phase 3 詳細設計
+│   └── 新キャラ差し替え手順.md  # 元 MIT 翻訳、Phase 1.12 で port 内容に更新
 ├── scripts/                 # ビルドスクリプト
 │   ├── build.ps1 / build.sh
 │   └── dev.ps1 / dev.sh
@@ -235,7 +292,8 @@ GoTuber/
 
 | Phase | 状態 | 内容 |
 |---|---|---|
-| **Phase 1** | ✅ **完了** | MVP: 透過 + クリックスルー + アトラス + マウス追従 + まばたき + メインマイク口パク + Tweaks + CJK フォント + ビルドスクリプト + slice ツール (Phase 1.11) |
+| **Phase 1.1 〜 1.11** | ✅ **完了** | MVP: 透過 + クリックスルー + アトラス + マウス追従 + まばたき + メインマイク口パク + Tweaks + CJK フォント + ビルドスクリプト + slice ツール (Phase 1.11) |
+| **Phase 1.12** | 🔄 **Planned** | キャラクターシステム全 port (tomari-guruguru → Go) — 設定スキーマを camelCase 化、Y 軸反転削除、元スライスツール (648 行) を MIT 継承、genplaceholder 廃止、_default を 1200×1200 WebP に再生成 |
 | Phase 2 | **保留中** | カメラ VTuber: 顔追従 + 口の自動検出（Q8 で再評価待ち） |
 | Phase 3 | 未着手 | VMC Protocol 出力 |
 
@@ -275,9 +333,10 @@ Phase 1.10 時点で:
 
 ## ステータス
 
-✅ **Phase 1 完了** — 全 Phase 1.1 〜 1.9 実装 + コードレビュー対応済み、`go test ./...` 全パス、Windows バイナリ 19.5 MB / Linux バイナリ 25 MB。
+⚠️ **Phase 1.11 実装完了 / Phase 1.12 (キャラクターシステム port) Planned** — Phase 1.1 〜 1.11 実装 + コードレビュー対応済み、`go test ./...` 全パス、Windows バイナリ 19.5 MB / Linux バイナリ 25 MB。
 
 - プラン: [docs/PLAN.md](docs/PLAN.md) v0.4.3
+- Phase 1.12 詳細: [docs/PHASE1.md](docs/PHASE1.md) Section 9
 - 設計判断: pure Go 書き直し採用（Wails / headless JS 比較の上、Section 0.5 参照）
 - ビルド方針: Windows 10/11（mingw-w64 クロスコンパイル）または WSL Ubuntu（gcc）
 - **視覚テストはユーザー側で実施予定**（実装完了 → 実行確認は手動）

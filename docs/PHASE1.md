@@ -1,305 +1,231 @@
-# GoTuber — Phase 1: Pure Go PNGTuber MVP 詳細設計
+## 9. Phase 1.12: キャラクターシステム全 port (tomari-guruguru → Go)
 
-> **ステータス**: Q's 決定済（Go 1.25 確認待ち）
-> **最終更新**: 2026-06-15
-> **親プラン**: [PLAN.md](./PLAN.md) v0.4.3
+Phase 1.11 で実装したキャラクター設定・スライスツール・アセット形式が、**私が勝手
+に作った疑似システム**で、元プロジェクト [tomari-guruguru](https://github.com/rotejin/tomari-guruguru)
+のキャラクターシステムと乖離していた。Phase 1.12 では、私が作ったものを **完全廃止**
+し、**元プロジェクトのキャラクターシステムを 100% Go に port** する。
 
----
+### 9.1 設計判断 (最重要)
 
-## 1. 目標
+- **Go への port = 「設定スキーマ + 画像ローダ + マウス追従」を Go に移植**。
+- **スライスツール (Python) は port せず、元実装をそのまま流用** (MIT、ffmpeg/ffprobe 依存)。
+  Go に書き直すと ffmpeg パイプラインの再実装になり、保守コストに見合わない。
+- 設定フォーマット: **YAML だが camelCase キーで `character-config.js` と完全互換**。
+  JSON ではなく YAML にした理由は、GoTuber 全体が YAML で統一されているため。
 
-`tomari-guruguru`（React/Vite/JSX のブラウザアプリ）の **Golang 完全書き換え** + **メインマイクで同時 Realtime 口パク**（メインの VTuber 使用ケース）。
+### 9.2 廃止 (削除) する自作実装
 
-前身と同等の機能（5×5 角度 × 6 状態、150 フレームのマウス追従・口パク・まばたき）を pure Go 単一バイナリで実現する。
-
-> **Q6 反映**: 音声ファイル口パクは **Phase 1.5+ で再評価**。Phase 1 はマイクのみに集中。
-
----
-
-## 2. ゴール / 非ゴール
-
-### 2.1 ゴール
-
-- 同じ PNG 形式（5×5×6 = 150 枚）がそのまま使える
-- 同じマウス追従・口パク・まばたきの挙動
-- 同じ Tweaks 概念
-- 同じスライス画像生成 Python ツール同梱
-- 単一バイナリ配布（15 MB 以下）
-- 透過背景 + クリックスルー
-- 24/7 連続運用
-- kill switch（Esc / SIGINT）
-- **メインマイクで同時 Realtime 口パク**（VTuber 配信用途の主機能）
-
-### 2.2 非ゴール
-
-- カメラ入力 → Phase 2（**保留中**、Q8 で再評価）
-- 音声ファイル口パク → Phase 1.5+ 検討枠（Q6 保留）
-- VMC Protocol 出力 → Phase 3
-- Live2D / 3D モデル対応
-- アセット同梱（権利上不可）
-
----
-
-## 3. 設計の核
-
-**malgo 完結オーディオ（Phase 1 スコープ）**: malgo 1 個で「マイク入力 + RMS 解析」を統一。**Phase 1 はマイク入力のみ**（ファイル再生・スピーカー出力は Phase 1.5+ で同アーキテクチャを拡張）。Ebitengine `audio/{mp3,wav,vorbis}` は **Phase 1.5+ で利用**（PCM デコーダーとして、Player/Context は起動しない方針は維持、PLAN.md §0.5 参照）。
-
-**5×5 で全方向カバー**: 5 行（pitch: 上→下）× 5 列（yaw: 左→右）= 25 セルで頭部の向きを表現。
-
-**6 状態（A〜F）**: 目（開け/閉じ）× 口（とじ/中間/開け）の組み合わせで表情を表現。
-
-詳細アーキテクチャは [PLAN.md §4](./PLAN.md#4-アーキテクチャ) 参照。
-
----
-
-## 4. 実装項目
-
-### Phase 1.1: プロジェクト雛形
-
-- `go mod init github.com/<owner>/GoTuber` で Go module 作成
-- 依存導入: `Ebitengine v2.9.9` / `malgo v0.11.25` / `ebitenui v0.7.3` / `golang.org/x/image v0.42.0` / `gopkg.in/yaml.v3`
-- 最小 `main.go`: 空の Ebitengine ウィンドウ
-- SIGINT ハンドラ + Esc キーリッスン（kill switch）
-- ディレクトリ構造（`cmd/`, `internal/`, `assets/`, `config/`, `tools/`, `scripts/`, `docs/`）
-- ビルドスクリプト雛形（`build.ps1` / `build.sh`）
-- テスト: `internal/killswitch/signal_test.go` — `Esc` 押下 / SIGINT で終了
-
-### Phase 1.2: 透過ウィンドウ + クリックスルー
-
-- **必ず `ebiten.SetWindowMousePassthrough(true)` を `Game.Update()` の初回呼び出し内で実行**（Issue #3222 対策）
-- `ebiten.SetWindowFloating(true)` 併用
-- フォーカスフリッカー検証: KASOU (Debian X11) で xdotool を使い「クリックスルー有効化直後 200ms のキー入力ロスト」計測
-- 問題があれば 60 フレーム遅延発火オプション追加
-- フォールバック: Win32 `WS_EX_TRANSPARENT` を `golang.org/x/sys/windows` から直接操作
-
-### Phase 1.3: スプライトアトラス loader
-
-- `init()` で `image/png`（標準）+ `golang.org/x/image/webp` を `image.RegisterFormat` 登録
-- **起動戦略**: ウィンドウ表示 → "Loading…" → `atlas.ready bool` 完了後にアバター表示
-- **展開方式**: よく使う 1 シート（25 枚）+ 近傍予備のみプリロード、残りは **遅延デコード**（[PLAN.md §8.1](./PLAN.md#81-メモリ予算) 参照）
-- 並列デコード（goroutine fan-out、`errgroup`）
-- クラッシュ対策: 展開完了フラグで Update 描画スキップ
-
-### Phase 1.4: 設定 YAML + 起動時バリデーション
-
-- `internal/character/config.go` で YAML 読み込み
-- フェイルファスト:
-  - `base_path` を `filepath.Abs` + `filepath.Clean` で解決
-  - 6 つのシートディレクトリ（A〜F）存在確認
-  - 各シートに 25 枚画像存在確認
-  - `ext` が "webp" または "png"
-- 失敗時: `MessageBox` (Win) / `zenity` (Linux) / `osascript` (mac) でエラー → `exit 1`
-
-### Phase 1.5: マウス追従
-
-- `internal/mouse/follow.go`
-- `smoothing` → `responsiveness` 改名（元 `smoothing` 値が小さいほど追従が遅い = 意味が逆だったため）
-- ロジック: target {x, y} を [-1, 1] で clamp、current に lerp で収束
-- 5×5 セルに cell {r, c} をマップ
-- テスト: `internal/mouse/follow_test.go`
-  - `TestFollow_TargetClamp`: target が [-1, 1] に clamp
-  - `TestFollow_SmoothingConverges`: smoothing k で current が target に収束
-
-### Phase 1.6: 自動まばたき
-
-- `internal/blink/scheduler.go`
-- 確率分布（二度瞬き 22% / ゆっくり 6% / 通常 72%）
-- 不規則な間隔（通常 1.8〜4.5s、たまに 0.7〜1.5s、ぼーっと 4.5〜9s）
-- テスト: `internal/blink/scheduler_test.go`
-  - `TestBlink_Distribution`: 1 万回サンプリングで 22/6/72 ± 2% に収まる
-
-### Phase 1.7: malgo マイク + エンベロープ + 口パク
-
-- **malgo 完結オーディオ（Phase 1 スコープ）**
-- malgo Capture モード（**入力のみ**。Duplex は Phase 1.5+ でファイル再生時に必要）
-- 入力形式: `malgo.FormatS16`、mono、48 kHz
-- エンベロープフォロワー: attack 0.5 / release 0.05（立ち上がり速、減衰遅。自然な音声挙動）
-- 口パク閾値: 0.05 (closed→half) / 0.20 (half→open)（int16 [-1, 1] RMS 較正）
-- ヒステリシス: **±0.02 RMS 値デッドゾーン**（時間ベースではない）
-  - MouthClosed → MouthHalf: envelope > 0.07
-  - MouthHalf → MouthClosed: envelope < 0.03
-  - MouthHalf → MouthOpen:   envelope > 0.22
-  - MouthOpen → MouthHalf:   envelope < 0.18
-  - **Open→Closed 直接遷移なし**（必ず Half 経由。soft landing 設計）
-- **ファイル再生（mp3/wav/ogg）口パクは Phase 1.5+ で追加**（Q6 保留、ユーザー判断）
-- スレッド: audio スレッド (malgo callback) → `atomic.StoreUint64` → game スレッド → `atomic.LoadUint64`
-- フェイルセーフ: `audio.NewMover()` 失敗時（デバイスなし等）は mover=nil で続行、口パク無効
-- テスト: `internal/audio/envelope_test.go`（Phase 1.10 で追加）
-  - `TestEnvelope_AttackRelease`: attack 0.5 / release 0.05
-  - `TestMouth_Hysteresis`: closed↔half, half↔open の閾値検証
-  - `TestRMS_Normalization`: int16 → [0, 1] 変換
-
-### Phase 1.8: Tweaks パネル + CJK フォント
-
-- `internal/tweaks/panel.go`（ebitenui ベース）
-- CJK フォント埋め込み（Noto Sans CJK JP、`go:embed`）
-- **Phase 1 は英語ラベル + 日本語フォントのみ**。i18n は需要が出たら Phase 2 以降で `gotext`
-
-### Phase 1.9: ビルドスクリプト
-
-- `build.ps1`（Windows native）
-- `build.sh`（WSL Ubuntu / Linux バイナリ）
-- `dev.ps1` / `dev.sh`（開発ループ）
-- `tools/requirements.txt` 同梱（Pillow, numpy のバージョン固定）
-- `tools/LICENSE-third-party` 同梱（依存ライブラリのライセンス一覧）
-- README に `pip install -r tools/requirements.txt` 手順明記
-
-### Phase 1.10: 仕上げ
-
-- README.md
-- LICENSE（MIT）
-- `docs/PHASE1.md`（実装ログ）
-- **`go test ./...` 全パス**確認
-
----
-
-## 5. 完了基準 (DoD)
-
-- [ ] WSL Ubuntu で `./gotuber` が 1 秒以内に起動する
-- [ ] **起動時に "Loading…" テキストが表示され、`atlas.ready = true` 後にアバターへ遷移する（クラッシュなし）**
-- [ ] KASOU (Debian 13) にデプロイして 60 FPS 安定
-- [ ] マウス追従が滑らか（25 方向すべて遷移）
-- [ ] **メインのマイクで同時 Realtime 口パクが反応**（F32 [-1,1] 較正、`thHalf`/`thFull` 感度調整可）
-- [ ] 自動まばたきが不規則に発火（二度・ゆっくり含む）
-- [ ] 透過背景で OBS 配信に重ねられる
-- [ ] クリックスルー有効時、配下アプリのクリックを遮らない（OBS で確認）
-- [ ] **フォーカスフリッカー検証 OK**（xdotool 計測）
-- [ ] `Esc` 押下で即座に終了する（kill switch）
-- [ ] ビルド成果物が **15 MB** 以下
-- [ ] **`go test ./...` 全パス**
-- [ ] README にビルド手順・KASOU デプロイ手順が明記
-
-> **削除された DoD**（Q6 反映）: 「音声ファイルで口パクが反応（mp3/wav/ogg）」— Phase 1.5+ で再評価
-
----
-
-## 6. 想定工数
-
-1〜2 週間（実働 40〜60 h）
-
-内訳:
-- Phase 1.1（雛形 + kill switch）: 0.5 日
-- Phase 1.2（透過 + クリックスルー）: 0.5〜1 日
-- Phase 1.3（アトラス）: 1〜2 日
-- Phase 1.4（設定 + バリデーション）: 0.5 日
-- Phase 1.5（マウス追従）: 0.5〜1 日
-- Phase 1.6（まばたき）: 0.5 日
-- Phase 1.7（malgo マイク + エンベロープ + 口パク）: **1〜2 日**（Q6 反映でファイル再生削除）
-- Phase 1.8（Tweaks + フォント）: 1〜2 日
-- Phase 1.9（ビルドスクリプト）: 0.5 日
-- Phase 1.10（仕上げ + テスト）: 0.5〜1 日
-
----
-
-## 7. 親プランとのクロスリファレンス
-
-| 項目 | 親プラン参照 |
+| ファイル / 関数 | 廃止理由 |
 |---|---|
-| §0.5 設計判断ログ（malgo 完結、pure Go 採用理由） | [PLAN.md §0.5](./PLAN.md#05-設計判断ログ) |
-| §2.1 スタック選定（Ebitengine, malgo, webp, ebitenui） | [PLAN.md §2.1](./PLAN.md#2-スタック選定) |
-| §3 機能マッピング（元 React → Go 移植マップ） | [PLAN.md §3](./PLAN.md#3-機能マッピング元--go) |
-| §4 アーキテクチャ（ディレクトリ、データフロー、コア型） | [PLAN.md §4](./PLAN.md#4-アーキテクチャ) |
-| §4.2.1 パフォーマンス予算 | [PLAN.md §4.2.1](./PLAN.md#421-パフォーマンス予算) |
-| §4.4 設定ファイル（YAML 構造） | [PLAN.md §4.4](./PLAN.md#4-アーキテクチャ) |
-| §4.5 起動時バリデーション | [PLAN.md §4.5](./PLAN.md#4-アーキテクチャ) |
-| §6 ビルド & 開発 | [PLAN.md §6](./PLAN.md#6-ビルド--開発) |
-| §7 リスク & 対策 | [PLAN.md §7](./PLAN.md#7-リスク--対策) |
-| §8.1 メモリ予算 | [PLAN.md §8.1](./PLAN.md#81-メモリ予算) |
-| §11 未解決事項（**Q1, Q3, Q4, Q12 確定**、Q6 / Q8 保留） | [PLAN.md §11](./PLAN.md#11-未解決事項実装前確認) |
+| `config/default.yaml` (snake_case スキーマ) | 元 `character-config.js` 互換の camelCase に置換 |
+| `internal/character/config.go` (YAML struct tags) | 同上 |
+| `internal/character/config.go:SheetFor` 口の `closed` キー | 元は `close` キー |
+| `internal/mouse/follow.go:Cell()` の Y 軸反転 | 元 `app.jsx:62` と同じく Y 軸反転なし |
+| `tools/slice_character_sheets.py` (シンプル版 163 行) | 元実装 648 行と完全置換 |
+| `tools/slice_character_sheets_test.py` (シンプル版) | 元実装のテストに更新 |
+| `tools/genplaceholder/` ディレクトリ全体 | 1200×1200 anchored frames を出せないため廃止 |
+| `assets/characters/_default/*.png` (200×200 PNG) | 1200×1200 WebP フレームに置換 |
+| `genplaceholder` の固定色塗り (青・緑・赤・紫・橙・シアン) | 方向の視認性がないため廃止 |
 
----
+### 9.3 元プロジェクトから port する要素
 
-## 8. 関連ドキュメント
+| 概念 | 元 (tomari-guruguru) | GoTuber (Phase 1.12) |
+|---|---|---|
+| 設定スキーマ | `src/character-config.js:1-25` | `internal/character/config.go:Config` struct |
+| 設定読み込み | ES Module `import` | `character.LoadConfig(path)` |
+| パス生成 | `charConfig.src(sheet, r, c)` | `(*Config).Src(sheet, r, c)` メソッド |
+| シート取得 | `charConfig.sheets.eyesOpen.close` | `(*Config).SheetFor(eyesClosed, mouth)` |
+| 行/列の向き | `r0=上, r4=下, c0=左, c4=右` | 同じ |
+| マウス追従式 | `app.jsx:60-62` | `mouse/follow.go:Cell()` |
+| アセットディレクトリ | `public/slices2/{A-F}/` | `assets/characters/<name>/{A-F}/` |
+| ファイル名 | `r{0-4}c{0-4}.{ext}` | 同じ |
+| 画像サイズ | 1200×1200 (anchored at 600, 900) | 同じ |
+| 拡張子 | webp (default) / png | 同じ |
+| シート数 | 6 (A〜F) | 同じ |
+| セル数 | 5×5 = 25 | 同じ |
+| 合計フレーム | 6×25 = 150 | 同じ |
 
-- 元プロジェクト: `../tomari-guruguru/README.md`
-- 元マウス追従: `../tomari-guruguru/src/app.jsx`
-- 元口パク: `../tomari-guruguru/src/talk-app.jsx`
-- 元まばたき: `../tomari-guruguru/src/app.jsx`（74〜110 行目）
-- Ebitengine Issue #3222: https://github.com/hajimehoshi/ebiten/issues/3222
+### 9.4 行/列の向き変更 (Go コード修正)
 
----
+元プロジェクトの規約:
 
-## 9. Phase 1.11: Polish 適用 + slice_character_sheets.py 実装
+- `r0` = 上を見る (マウスが画面上にある時)
+- `r2` = 正面 (マウスが中央)
+- `r4` = 下を見る (マウスが画面下)
+- `c0` = 左を見る、`c2` = 正面、`c4` = 右を見る
 
-Phase 1.10 完了後に残っていた deferred Polish と、未実装だった `tools/slice_character_sheets.py` を実装。
+**変更点**:
 
-### 9.1 tools/slice_character_sheets.py
+`internal/mouse/follow.go:Cell()` の Y 軸反転を削除:
 
-5×5 が並んだ 1 枚のスプライトシート PNG を 25 枚の個別 PNG に分割する Python ツール。元 tomari-guruguru 由来の設計を踏襲、MIT 継承。
+```go
+// 旧 (Phase 1.11、自作):
+c := int((f.currentX + 1) / 2 * 5)
+r := 4 - int((f.currentY + 1) / 2 * 5) // Y 軸反転 (間違い)
 
-**機能**:
-- 単一シート分割 (`--input` / `--output`)
-- 6 シート一括分割 (`--input-sheet "A:path1,B:path2,..."` / `--output-dir`)
-- セルサイズ可変 (`--cell-size`, default 100px)
-- 既存ファイルスキップ (default) / `--overwrite` で上書き
-- シートサイズ警告（想定外サイズでも継続、余白はクロップ）
-
-**出力構造**:
+// 新 (Phase 1.12、元 port):
+c := int((f.currentX + 1) / 2 * 5)
+r := int((f.currentY + 1) / 2 * 5) // Y 軸反転なし (r0=上, r4=下)
 ```
-<output>/A/r0c0.png ... A/r4c4.png  (25 枚)
-<output>/B/...
-...
-<output>/F/...
+
+参照: `tomari-guruguru/src/app.jsx:60-62`:
+
+```js
+const c = clamp(Math.round((current.current.x + 1) / 2 * (COLS - 1)), 0, COLS - 1);
+const r = clamp(Math.round((current.current.y + 1) / 2 * (ROWS - 1)), 0, ROWS - 1);
 ```
 
-**使用方法**:
+これにより、`r0` が上、`r4` が下となり、元プロジェクトと完全一致。
+
+### 9.5 設定スキーマ (YAML) — `character-config.js` 互換
+
+旧 (Phase 1.11、自作):
+
+```yaml
+character:
+  name: "Default"
+  base_path: "assets/characters/_default"
+  ext: "png"
+  rows: 5
+  cols: 5
+  sheets:
+    eyes_open:
+      closed: "A"
+      half: "B"
+      open: "C"
+    eyes_closed:
+      closed: "D"
+      half: "E"
+      open: "F"
+```
+
+新 (Phase 1.12、元 `character-config.js` port):
+
+```yaml
+# src/character-config.js と完全互換のキー名
+basePath: "assets/characters/_default"
+ext: "webp"  # デフォルト webp (元プロジェクトと同じ)
+rows: 5
+cols: 5
+sheets:
+  eyesOpen:
+    close: "A"   # 元の "close" キーを維持
+    half: "B"
+    open: "C"
+  eyesClosed:
+    close: "D"
+    half: "E"
+    open: "F"
+```
+
+`internal/character/config.go` の Go struct も camelCase YAML tag になる:
+
+```go
+type Config struct {
+    BasePath string `yaml:"basePath"`
+    Ext      string `yaml:"ext"`
+    Rows     int    `yaml:"rows"`
+    Cols     int    `yaml:"cols"`
+    Sheets   Sheets `yaml:"sheets"`
+}
+
+type Sheets struct {
+    EyesOpen   EyeMouthStates `yaml:"eyesOpen"`
+    EyesClosed EyeMouthStates `yaml:"eyesClosed"`
+}
+
+type EyeMouthStates struct {
+    Close string `yaml:"close"`
+    Half  string `yaml:"half"`
+    Open  string `yaml:"open"`
+}
+```
+
+### 9.6 スライスツール (Python) — 元実装をそのまま流用
+
+`tomari-guruguru/tools/slice_character_sheets.py` (648 行) を **そのまま** `tools/slice_character_sheets.py` に配置:
+
+- component mode (8-connected alpha components)
+- `--remove-gray-residue` (低彩度グレー残差除去)
+- `--alpha-threshold`, `--row-threshold`, `--row-margin`
+- `--jobs`, `--min-component-area`, `--resume`
+- format: webp (default) / png
+- 1200×1200 anchored frames
+- ffmpeg/ffprobe 必須
+
+**Go には port しない理由**:
+
+- 元実装は 648 行の Python で、内部で ffmpeg/ffprobe を subprocess で呼ぶ
+- Go に書き直すと、`libwebp` バインディング + 連結成分検出 + アルファ処理の再実装になり、保守コストに見合わない
+- スライスツールは **ビルド時 1 度だけ実行**するプリプロセスで、Go ランタイムに含まれない
+- 元プロジェクトと同じ動作を保証することで、**スライス済みアセットのドロップイン互換**が得られる
+
+依存ツール:
+
 ```bash
-# インストール
+# ffmpeg / ffprobe (必須)
+brew install ffmpeg            # macOS
+sudo apt install ffmpeg        # Ubuntu / Debian
+# Windows: https://www.gyan.dev/ffmpeg/builds/ から DL
+
+# Python 依存
 pip install -r tools/requirements.txt
-
-# 単一シート分割 (sheet_A.png 500x500 を A ディレクトリに)
-python tools/slice_character_sheets.py \
-    --input sheet_A.png --output assets/characters/my_char/A
-
-# 6 シート一括 (A-F)
-python tools/slice_character_sheets.py \
-    --input-sheet "A:sheet_A.png,B:sheet_B.png,C:sheet_C.png,D:sheet_D.png,E:sheet_E.png,F:sheet_F.png" \
-    --output-dir assets/characters/my_char
 ```
 
-**テスト** (8 件):
-- `test_slice_sheet_creates_25_files`: 5×5 → 25 枚分割
-- `test_slice_sheet_preserves_cell_content`: 分割後のセル色が元シートと一致
-- `test_slice_sheet_skip_existing`: 既存ファイルは上書きしない
-- `test_slice_sheet_overwrite`: --overwrite で上書き
-- `test_parse_sheet_pairs`: SHEET:PATH パース
-- `test_parse_sheet_pairs_invalid_sheet`: 不正シート名でエラー
-- `test_main_single_file`: CLI 単一ファイルモード E2E
-- `test_main_multi_file`: CLI 複数ファイルモード E2E
+### 9.7 デフォルトアセット — 1200×1200 anchored WebP フレーム
 
-実行: `python tools/slice_character_sheets_test.py` (pytest 不要のフォールバック)
-または: `python -m pytest tools/slice_character_sheets_test.py -v`
+Phase 1.11 の `genplaceholder` を廃止し、元プロジェクトと同じ仕様のアセットを新規生成する。
 
-### 9.2 適用した Polish
+**生成フロー**:
 
-| フェーズ | 内容 | ファイル |
-|---|---|---|
-| Phase 1.6 | `decodePCM16` の `sync.Pool` 化 (GC 圧削減) | `internal/audio/capture.go` |
-| Phase 1.6 | `releasePCMSamples` ヘルパー追加、テストでプールに戻す | `internal/audio/capture.go`, `envelope_test.go` |
-| Phase 1.6 | テスト追加: `TestDecodePCM16_PoolReuse` (100 回ループ) | `internal/audio/envelope_test.go` |
-| Phase 1.8 | Slider 値域の定数化 (`sliderMin`, `sliderMax`) | `internal/tweaks/panel.go` |
-| Phase 1.8 | `clampInt` ヘルパー追加、初期値計算の重複削除 | `internal/tweaks/panel.go` |
-| Phase 1.8 | テスト追加: `TestNewPanel`, `TestNewPanel_NoAudio`, `TestClampInt`, `TestSliderConstants` | `internal/tweaks/panel_test.go` |
+1. まず 6 枚の 4500×4500 RGBA PNG を `tools/genplaceholder-4500/` で生成 (Cairo + Go 画像ライブラリ)
+2. 元の `tools/slice_character_sheets.py` で component mode スライス
+3. 150 枚の 1200×1200 WebP を `assets/characters/_default/{A-F}/` に出力
 
-### 9.3 未着手の Polish (Phase 1.10 で deferred のまま)
+または、**元 tomari-guruguru の `public/slices2/` の中身を `assets/characters/_default/` にコピー**する運用でも良い (同じディレクトリ構造、同じファイル名、同じ画像形式)。
 
-| 項目 | 理由 | 対応方針 |
-|---|---|---|
-| decodePCM16 ステレオ対応 | Phase 1 はモノラルのみ (malgo config channels=1) | 不要 (仕様外) |
-| エンベロープ period size 実測 | ハードウェア依存、視覚テスト時に確認 | Phase 2 以降 |
-| フォントサイズ可変化 (Tweaks) | UI 設計判断が必要 | 需要が出たら |
-| Audio checkbox グレー表示の視覚確認 | 実機実行で確認 | ユーザー視覚テスト時 |
-| i18n (gotext) | Phase 1 は英語ラベルのみ | 需要が出たら Phase 2 以降 |
-| State setter パターン | 単一 goroutine 前提が現状適切 | mutex 化が必要になったら |
-| mutex 化 | 単一 goroutine で十分 | 並行アクセス必要時 |
-| Mouse クリックスルー ↔ window placement | 現状で動作している | 必要時のみ |
+### 9.8 DoD (Phase 1.12 完了基準)
 
-### 9.4 Phase 1.11 完了条件
+#### コード
 
-- [x] `tools/slice_character_sheets.py` 実装 (180 行)
-- [x] `tools/slice_character_sheets_test.py` 8 テスト
-- [x] `internal/audio`: sync.Pool 化
-- [x] `internal/tweaks`: slider 定数化 + clampInt
-- [x] `internal/tweaks/panel_test.go`: 4 テスト追加
-- [x] `go test ./...` 全 pass
-- [x] Windows + Linux ビルド成功
+- [ ] `internal/character/config.go` を camelCase YAML tag に書き換え
+- [ ] `config/default.yaml` を camelCase スキーマに書き換え
+- [ ] `internal/mouse/follow.go:Cell()` の Y 軸反転を削除
+- [ ] `mouse/follow_test.go` の期待値を新仕様 (r0=上) に更新
+- [ ] `tools/slice_character_sheets.py` を元 648 行版に置換
+- [ ] `tools/slice_character_sheets_test.py` を元版に置換
+- [ ] `tools/requirements.txt` に ffmpeg/ffprobe への言及追加
+- [ ] `tools/genplaceholder/` ディレクトリを削除
+- [ ] `assets/characters/_default/` の 150 枚を 1200×1200 WebP に再生成
+- [ ] ビルドスクリプト (`scripts/build.ps1` / `scripts/build.sh`) で動作確認
+
+#### ドキュメント
+
+- [ ] `docs/新キャラ差し替え手順.md` を「100% port」明記に書き換え
+- [ ] `docs/PHASE1.md` Section 9 を全面書き換え (port vs 互換性)
+- [ ] `docs/PLAN.md` 機能マッピング表を `character-config.js` ベースに更新
+- [ ] `docs/PLAN.md` 設定例を camelCase に更新
+- [ ] `docs/PLAN.md` Phase リストに Phase 1.12 (port) として明記
+- [ ] `README.md` キャラ作成手順を新仕様に更新
+- [ ] `README.md` で「Phase 1.11 Done / Phase 1.12 Planned」と状態明示
+
+#### 検証
+
+- [ ] `go test ./...` 全パス
+- [ ] `go build` (Windows + Linux) 成功
+- [ ] 起動時ログで「mouse Y-axis flip removed (matches tomari-guruguru app.jsx:62)」と表示
+- [ ] 起動時ログで「config keys: basePath, ext, rows, cols, sheets.{eyesOpen,eyesClosed}.{close,half,open}」と表示
+- [ ] スライスツール単体テスト (`python -m pytest tools/slice_character_sheets_test.py`) 全パス
+- [ ] 元 `public/slices2/` の中身を `assets/characters/_default/` にコピーして起動できる (drop-in 互換確認)
+
+### 9.9 互換性確認 (drop-in)
+
+Phase 1.12 完了後、元 tomari-guruguru のスライス済みデータ (4500×4500 PNG を component mode で
+25 枚に分割した結果) が、GoTuber 側にドロップインで動く:
+
+- **ファイル命名規則**: `r{行}c{列}.{ext}` → 一致
+- **ディレクトリ構造**: `{basePath}/{A-F}/r{0-4}c{0-4}.{ext}` → 一致
+- **設定**: `src/character-config.js` の `basePath` + `ext` + `sheets` → GoTuber の `config/default.yaml` の `basePath` + `ext` + `sheets` で対応
+- **マウス追従**: `r0=上` で完全一致
+
+つまり、**Phase 1.11 で生成した 100x100 PNG プレースホルダは破棄**し、**元プロジェクトのスライス済み WebP を `assets/characters/_default/` にそのままコピー**すれば、GoTuber で動作する。
