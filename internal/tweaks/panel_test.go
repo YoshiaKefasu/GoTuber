@@ -129,3 +129,44 @@ func TestSliderConstants(t *testing.T) {
 		t.Errorf("sliderMax (%d) should be 100 (representing 1.0)", sliderMax)
 	}
 }
+
+// TestPanel_SetUIHidden は SetUIHidden フラグの動作確認 (Phase 1.13b)。
+// Ctrl+Shift+H トグル時に Game.Update() から呼ばれる想定。
+func TestPanel_SetUIHidden(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("SetUIHidden panicked: %v", r)
+		}
+	}()
+	face := LoadFontFace(16)
+	state := NewState()
+	panel := NewPanel(face, state, true)
+	if panel.uiHidden {
+		t.Error("expected initial uiHidden=false")
+	}
+	panel.SetUIHidden(true)
+	if !panel.uiHidden {
+		t.Error("expected uiHidden=true after SetUIHidden(true)")
+	}
+	panel.SetUIHidden(false)
+	if panel.uiHidden {
+		t.Error("expected uiHidden=false after SetUIHidden(false)")
+	}
+}
+
+// TestPanel_Draw_SkipsWhenUIHidden は uiHidden=true で Draw() が即 return することを確認 (Phase 1.13b)。
+// nil image を渡しても uiHidden なら panic しない。
+// (実画面描画は ebiten context が必要なため、ここでは no-op であることだけ検証)
+func TestPanel_Draw_SkipsWhenUIHidden(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("Draw with uiHidden=true panicked: %v", r)
+		}
+	}()
+	face := LoadFontFace(16)
+	state := NewState()
+	panel := NewPanel(face, state, true)
+	panel.SetUIHidden(true)
+	// nil image を渡しても uiHidden なら即 return するはず
+	panel.Draw(nil)
+}

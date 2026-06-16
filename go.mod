@@ -6,6 +6,7 @@ require (
 	github.com/ebitenui/ebitenui v0.7.3
 	github.com/gen2brain/malgo v0.11.25
 	github.com/hajimehoshi/ebiten/v2 v2.9.9
+	github.com/pelletier/go-toml/v2 v2.3.1
 	golang.org/x/image v0.42.0
 	gopkg.in/yaml.v3 v3.0.1
 )

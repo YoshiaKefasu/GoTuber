@@ -23,6 +23,16 @@ const (
 	initialWindowHeight     = 720
 )
 
+// DeviceListMessage は起動時バックグラウンドで列挙したデバイス一覧を
+// メインスレッド (Game.Update) に通知するためのチャネルメッセージ (Phase 1.13a S-1)。
+//
+// ebitenui は goroutine safe ではないため、起動時バックグラウンド goroutine からは
+// 直接 panel.SetDevices() を呼べない。代わりに chan DeviceListMessage に送信し、
+// Game.Update 内の select でメインスレッドに dispatch する。
+type DeviceListMessage struct {
+	Devices []audio.Device
+}
+
 // Game は Ebitengine のゲームロジック実装。
 type Game struct {
 	atlas  *character.Atlas
@@ -41,9 +51,23 @@ type Game struct {
 	// 内部状態
 	eyesClosed bool
 	mouthState int
+
+	// Phase 1.13b: UI 全非表示フラグ。Ctrl+Shift+H で toggle。
+	// true のとき Tweaks パネル + 設定 UI (将来追加分) 全部を非表示。
+	// kill switch (Esc/SIGINT) は uiHidden に関わらず常に有効。
+	uiHidden bool
+
+	// Phase 1.13a S-1: 起動時バックグラウンド goroutine から
+	// デバイス一覧を受け取るチャネル (buffered, 容量 1)。
+	// nil のときは select で default に流れる (テスト用最小初期化でも安全)。
+	devicesCh chan DeviceListMessage
 }
 
 // New は新しい Game を作成する。
+// devicesCh: 起動時バックグラウンド goroutine から device list を受け取るチャネル。
+//
+// nil を渡すと dispatch ロジックは無効化される (テスト時に便利)。
+// main.go では必ず make(chan DeviceListMessage, 1) を渡す。
 func New(
 	atlas *character.Atlas,
 	follower *mouse.Follower,
@@ -51,6 +75,7 @@ func New(
 	audioMover *audio.Mover,
 	panel *tweaks.Panel,
 	tweaksState *tweaks.State,
+	devicesCh chan DeviceListMessage,
 ) *Game {
 	return &Game{
 		atlas:       atlas,
@@ -62,6 +87,8 @@ func New(
 		firstUpdate: true,
 		width:       initialWindowWidth,
 		height:      initialWindowHeight,
+		uiHidden:    false, // explicit: 初期は全 UI 表示状態 (F1 で開く)
+		devicesCh:   devicesCh,
 	}
 }
 
@@ -81,8 +108,29 @@ func (g *Game) Update() error {
 	}
 	// パネル表示状態に応じてクリックスルー切替 (Issue #3222 対策で Update 内で呼ぶ)
 	// PanelVisible 中はマウスイベントをウィンドウに届ける必要があるため passthrough 無効化
+	// uiHidden=true のときは PanelVisible に関わらず passthrough=true にする
+	// (1.13b: 全 UI 非表示フラグ、Ctrl+Shift+H で toggle)
 	if g.tweaks.PanelVisible != prevPanelVisible {
-		ebiten.SetWindowMousePassthrough(!g.tweaks.PanelVisible)
+		g.applyPassthrough()
+	}
+
+	// Phase 1.13b: Ctrl+Shift+H で全 UI 非表示トグル (配信時 OBS キャプチャ対策)
+	// P-1: 2 キーは IsKeyPressed (押下状態) + 1 キーは IsKeyJustPressed (立ち上がりエッジ)。
+	//      3 キー同時 "just pressed" は物理的に検出できない。
+	if ebiten.IsKeyPressed(ebiten.KeyControl) && ebiten.IsKeyPressed(ebiten.KeyShift) && inpututil.IsKeyJustPressed(ebiten.KeyH) {
+		g.ToggleUIHidden()
+	}
+
+	// Phase 1.13a S-1: 起動時バックグラウンド goroutine からの panel.SetDevices を
+	// メインスレッドに dispatch する。ebitenui は goroutine safe ではないため。
+	// バッファ付きチャネル + default ケースで、フレーム予算を消費しない (non-blocking)。
+	// nil チャネル (テスト時) は select で default に流れるので安全。
+	select {
+	case msg := <-g.devicesCh:
+		if g.panel != nil {
+			g.panel.SetDevices(msg.Devices)
+		}
+	default:
 	}
 
 	// Tweaks panel の Quit ボタン
@@ -159,7 +207,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	op.GeoM.Translate(ox, oy)
 	screen.DrawImage(img, op)
 
-	if g.tweaks.PanelVisible {
+	if !g.uiHidden && g.tweaks.PanelVisible {
 		g.panel.Draw(screen)
 	}
 }
@@ -183,3 +231,35 @@ func (g *Game) Layout(w, h int) (int, int) {
 
 // WindowTitle は Ebitengine の SetWindowTitle に渡す定数。
 func WindowTitle() string { return windowTitle }
+
+// passthroughDesired は UI 表示状態から期待されるクリックスルー (passthrough) を返す。
+// 純粋関数なのでユニットテストでカバー可能 (ebiten context 不要)。
+//
+// 真理値表:
+//   - panelVisible=true,  uiHidden=false → passthrough=false (UI クリック受付)
+//   - panelVisible=true,  uiHidden=true  → passthrough=true  (UI を全部隠す)
+//   - panelVisible=false, uiHidden=true  → passthrough=true  (UI を全部隠す)
+//   - panelVisible=false, uiHidden=false → passthrough=true  (UI は元々非表示)
+func passthroughDesired(panelVisible, uiHidden bool) bool {
+	return !(panelVisible && !uiHidden)
+}
+
+// applyPassthrough は UI 表示状態に応じてクリックスルーを切り替える。
+// PanelVisible トグル時・uiHidden トグル時の両方から呼ばれる集約点。
+// g.tweaks が nil (テスト用最小初期化) のときは何もしない。
+func (g *Game) applyPassthrough() {
+	if g.tweaks == nil {
+		return
+	}
+	ebiten.SetWindowMousePassthrough(passthroughDesired(g.tweaks.PanelVisible, g.uiHidden))
+}
+
+// ToggleUIHidden は uiHidden フラグを反転し、Panel に通知 + passthrough を更新する。
+// Update() のキー検出からも、テストからも呼ばれる公開メソッド。
+func (g *Game) ToggleUIHidden() {
+	g.uiHidden = !g.uiHidden
+	if g.panel != nil {
+		g.panel.SetUIHidden(g.uiHidden)
+	}
+	g.applyPassthrough()
+}

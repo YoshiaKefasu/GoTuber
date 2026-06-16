@@ -13,6 +13,7 @@ import (
 	"github.com/YoshiaKefasu/GoTuber/internal/audio"
 	"github.com/YoshiaKefasu/GoTuber/internal/blink"
 	"github.com/YoshiaKefasu/GoTuber/internal/character"
+	"github.com/YoshiaKefasu/GoTuber/internal/config"
 	"github.com/YoshiaKefasu/GoTuber/internal/game"
 	"github.com/YoshiaKefasu/GoTuber/internal/killswitch"
 	"github.com/YoshiaKefasu/GoTuber/internal/mouse"
@@ -84,8 +85,21 @@ func main() {
 	// OS シグナルハンドラ
 	killswitch.Install()
 
+	// Phase 1.13a: ユーザー設定 (TOML) 読み込み
+	userCfg, err := config.Load()
+	if err != nil {
+		log.Printf("config load failed (using defaults): %v", err)
+		userCfg = &config.Config{}
+	}
+	if userCfg.Audio.DeviceID == "" {
+		log.Printf("config loaded: audio.device_id = (OS default)")
+	} else {
+		log.Printf("config loaded: audio.device_id = %s", userCfg.Audio.DeviceID)
+	}
+
 	// マイクキャプチャ開始（失敗時は口パク無効で続行）
-	mover, err := audio.NewMover()
+	// Phase 1.13a: 設定のデバイス ID を malgo に渡す
+	mover, err := audio.NewMoverByID(userCfg.Audio.DeviceID)
 	if err != nil {
 		log.Printf("audio init failed (continuing without mouth movement): %v", err)
 		mover = nil
@@ -137,7 +151,57 @@ func main() {
 		return "greyed (mic unavailable)"
 	}())
 
-	g := game.New(atlas, mouse.NewFollower(0.3), blink.New(), mover, panel, tweaksState)
+	// Phase 1.13a: Panel にデバイス選択コールバックを設定。
+	// tweaks パッケージは audio 操作を直接行わず、main.go がオーケストレータになる。
+	panel.SetOnDeviceSelected(func(deviceID string) {
+		// P-4: 選択イベントで即座に config.Save を呼ぶ (永続化)
+		userCfg.Audio.DeviceID = deviceID
+		if err := userCfg.Save(); err != nil {
+			log.Printf("config save failed: %v", err)
+		} else {
+			log.Printf("config saved: audio.device_id = %q", deviceID)
+		}
+		// Mover 再起動 (失敗時は古い mover を維持できないので nil にして UI のみ続行)
+		if mover == nil {
+			log.Printf("audio: cannot restart (no initial mover)")
+			return
+		}
+		if err := mover.Restart(deviceID); err != nil {
+			log.Printf("audio restart failed (continuing with stale state): %v", err)
+		} else {
+			log.Printf("audio restarted with device_id = %q", deviceID)
+		}
+	})
+	panel.SetOnRefreshDevices(func() []audio.Device {
+		// 同期 ListDevices を実行 (Refresh ボタンは ebitenui メインスレッドから呼ばれるため OK)
+		devices, err := audio.ListDevices()
+		if err != nil {
+			log.Printf("device refresh failed: %v", err)
+			return nil
+		}
+		log.Printf("device refresh: %d devices", len(devices))
+		return devices
+	})
+
+	// Phase 1.13a P-5: 起動時バックグラウンドで WASAPI 遅延初期化対策として
+	// exponential backoff (即時 → 1s → 2s → 4s) でデバイス列挙。
+	// 失敗時は OS デフォルトにフォールバック (panel 初期表示の "(OS default)" のみ)。
+	//
+	// S-1: ebitenui は goroutine safe ではないため、panel.SetDevices() を直接呼ばず
+	// バッファ付き channel にメッセージを送信 → Game.Update 内の select で
+	// メインスレッドに dispatch する。容量 1 で十分 (送信 1 回のみ)。
+	devicesCh := make(chan game.DeviceListMessage, 1)
+	go func() {
+		devices, err := audio.ListDevicesWithRetry()
+		if err != nil {
+			log.Printf("device enumeration failed (using OS default): %v", err)
+			return
+		}
+		log.Printf("device enumeration: %d devices", len(devices))
+		devicesCh <- game.DeviceListMessage{Devices: devices}
+	}()
+
+	g := game.New(atlas, mouse.NewFollower(0.3), blink.New(), mover, panel, tweaksState, devicesCh)
 
 	// ゲームループ
 	// ebiten.Termination は kill switch 発火時の正常終了として扱う（終了コード 0）

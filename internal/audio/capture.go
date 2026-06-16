@@ -6,6 +6,7 @@ import (
 	"math"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/gen2brain/malgo"
 )
@@ -26,36 +27,78 @@ type Capture struct {
 	rmsBits uint64 // atomic, float64 bits
 }
 
+// newContext は malgo デフォルトバックエンドで Alloc を初期化する。
+// devices.go (ListDevices) と capture.go (NewCapture/NewCaptureByID) で共有。
+func newContext() (*malgo.AllocatedContext, error) {
+	return malgo.InitContext(nil, malgo.ContextConfig{}, nil)
+}
+
 // NewCapture は malgo context + capture device を初期化する。
+// OS デフォルト入力デバイスを使用する。
 // デバイスが見つからない場合エラーを返す。
 func NewCapture() (*Capture, error) {
-	// backends=nil でデフォルトバックエンド自動選択
-	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
+	return NewCaptureByID("")
+}
+
+// NewCaptureByID は指定した malgo 内部 device ID でキャプチャデバイスを初期化する。
+// deviceID が空文字 "" の場合は OS デフォルト入力デバイスを使う。
+//
+// Phase 1.13a: ユーザーが Tweaks パネルで選択したマイクデバイスで起動するため。
+// ID 不一致の場合はエラーを返し、呼び出し側は OS デフォルトにフォールバックする。
+//
+// S-2 修正: defer 化で LIFO 順序 (Uninit → Free) を保証。
+// 旧コードは 3 つのエラー path (list devices / not found / init device) で
+// 個別に ctx.Free() を呼んでいたが、ctx.Uninit() をスキップしており
+// malgo godoc の "Free must only be called for an uninitialized context." に違反していた。
+// defer に統一することで全ての return path で正しい順序が保証される。
+func NewCaptureByID(deviceID string) (*Capture, error) {
+	ctx, err := newContext()
 	if err != nil {
 		return nil, fmt.Errorf("malgo init: %w", err)
 	}
-
-	c := &Capture{ctx: ctx}
+	// defer は LIFO で実行される: Uninit (内部状態解放) → Free (構造体解放) の順。
+	// 関数 return 時に必ず両方が呼ばれる。
+	defer ctx.Free()
+	defer ctx.Uninit()
 
 	deviceConfig := malgo.DefaultDeviceConfig(malgo.Capture)
 	deviceConfig.Capture.Format = format
 	deviceConfig.Capture.Channels = channels
 	deviceConfig.SampleRate = sampleRate
 
-	// DataProc は duplex 用シグネチャ。Capture のみ使用時は pOutput は無視、pInput に PCM データ。
-	onData := func(_, pInput []byte, _ uint32) {
-		samples := decodePCM16(pInput)
-		rms := computeRMS(samples)
-		atomic.StoreUint64(&c.rmsBits, math.Float64bits(rms))
-		// サンプル slice をプールに戻す (GC 圧削減)
-		releasePCMSamples(samples)
+	// deviceID 指定がある場合: ListDevices() で一致する DeviceInfo を探して pointer を設定
+	if deviceID != "" {
+		infos, err := ctx.Context.Devices(malgo.Capture)
+		if err != nil {
+			return nil, fmt.Errorf("malgo list devices: %w", err)
+		}
+		var matched bool
+		for _, info := range infos {
+			if info.ID.String() == deviceID {
+				deviceConfig.Capture.DeviceID = unsafe.Pointer(info.ID.Pointer())
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return nil, fmt.Errorf("audio: device id %q not found", deviceID)
+		}
 	}
+	// deviceID == "" → デフォルト (malgo.DeviceID ゼロ値 = OS 選択)
 
+	// DataProc は duplex 用シグネチャ。Capture のみ使用時は pOutput は無視、pInput に PCM データ。
+	// S-4: クロージャで Capture を参照。c.deviceID フィールドは削除済み (dead storage)。
+	c := &Capture{ctx: ctx}
 	device, err := malgo.InitDevice(ctx.Context, deviceConfig, malgo.DeviceCallbacks{
-		Data: onData,
+		Data: func(_, pInput []byte, _ uint32) {
+			samples := decodePCM16(pInput)
+			rms := computeRMS(samples)
+			atomic.StoreUint64(&c.rmsBits, math.Float64bits(rms))
+			// サンプル slice をプールに戻す (GC 圧削減)
+			releasePCMSamples(samples)
+		},
 	})
 	if err != nil {
-		ctx.Free()
 		return nil, fmt.Errorf("malgo init device: %w", err)
 	}
 	c.device = device
