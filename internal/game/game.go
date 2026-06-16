@@ -3,6 +3,7 @@ package game
 
 import (
 	"image/color"
+	"math"
 	"time"
 
 	"github.com/YoshiaKefasu/GoTuber/internal/audio"
@@ -18,8 +19,8 @@ import (
 
 const (
 	windowTitle  = "GoTuber"
-	windowWidth  = 640
-	windowHeight = 480
+	windowWidth  = 1280
+	windowHeight = 720
 )
 
 // Game は Ebitengine のゲームロジック実装。
@@ -32,6 +33,10 @@ type Game struct {
 	tweaks *tweaks.State
 
 	firstUpdate bool
+
+	// 現在のウィンドウサイズ (Layout() で毎フレーム更新)
+	width  int
+	height int
 
 	// 内部状態
 	eyesClosed bool
@@ -55,6 +60,8 @@ func New(
 		panel:       panel,
 		tweaks:      tweaksState,
 		firstUpdate: true,
+		width:       windowWidth,
+		height:      windowHeight,
 	}
 }
 
@@ -85,7 +92,7 @@ func (g *Game) Update() error {
 
 	// マウス追従
 	mx, my := ebiten.CursorPosition()
-	g.mouse.Update(mx, my, windowWidth, windowHeight, g.tweaks.MouseResponsiveness)
+	g.mouse.Update(mx, my, g.width, g.height, g.tweaks.MouseResponsiveness)
 
 	// 自動まばたき
 	if g.tweaks.BlinkEnabled {
@@ -138,10 +145,18 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	}
 
 	iw, ih := img.Bounds().Dx(), img.Bounds().Dy()
-	ox := (windowWidth - iw) / 2
-	oy := (windowHeight - ih) / 2
+	// アスペクト比を維持してウィンドウ内に収まるようスケール。
+	// スプライト 1200x1200 をウィンドウサイズに合わせる。
+	scaleX := float64(g.width) / float64(iw)
+	scaleY := float64(g.height) / float64(ih)
+	scale := math.Min(scaleX, scaleY)
+	scaledW := float64(iw) * scale
+	scaledH := float64(ih) * scale
+	ox := (float64(g.width) - scaledW) / 2
+	oy := (float64(g.height) - scaledH) / 2
 	op := &ebiten.DrawImageOptions{}
-	op.GeoM.Translate(float64(ox), float64(oy))
+	op.GeoM.Scale(scale, scale)
+	op.GeoM.Translate(ox, oy)
 	screen.DrawImage(img, op)
 
 	if g.tweaks.PanelVisible {
@@ -157,8 +172,13 @@ func (g *Game) sheetForState() int {
 }
 
 // Layout はウィンドウサイズを返す。
+// SetWindowResizingMode(WindowResizingModeEnabled) でリサイズ可能なため、
+// ユーザー操作でウィンドウサイズが変わると Ebitengine がこの関数を呼ぶ。
+// 内部キャンバスはウィンドウサイズに追従する。
 func (g *Game) Layout(w, h int) (int, int) {
-	return windowWidth, windowHeight
+	g.width = w
+	g.height = h
+	return w, h
 }
 
 // WindowTitle は Ebitengine の SetWindowTitle に渡す定数。

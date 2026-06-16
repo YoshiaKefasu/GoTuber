@@ -100,9 +100,12 @@ func main() {
 
 	// ウィンドウ設定
 	ebiten.SetWindowTitle(game.WindowTitle())
-	ebiten.SetWindowSize(640, 480)
+	ebiten.SetWindowSize(1280, 720)
 	// ウィンドウ位置を画面中央寄りに明示 (デフォルト (0,0) だとタスクバー裏に隠れる)
 	ebiten.SetWindowPosition(200, 200)
+	// ウィンドウリサイズ有効 (Ebitengine v2: WindowResizingModeEnabled でドラッグリサイズ可能)
+	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
+	log.Printf("window resizing: enabled")
 
 	// Ebitengine v2: デフォルトで floating=false (他ウィンドウの後ろにいける)
 	// --topmost フラグで明示的に ON にできる
