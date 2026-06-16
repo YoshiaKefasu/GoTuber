@@ -1,0 +1,7 @@
+# GoTuber Python tool dependencies
+#
+# tools/genplaceholder 用の依存。
+# インストール: pip install -r tools/requirements.txt
+
+Pillow==10.4.0
+numpy==2.0.0

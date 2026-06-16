@@ -1,0 +1,108 @@
+# Third-party Licenses
+
+GoTuber は以下のオープンソースソフトウェアを利用しています。
+各ソフトウェアのライセンスは原作者に帰属します。
+
+---
+
+## Runtime Dependencies (Go)
+
+### github.com/hajimehoshi/ebiten/v2 — v2.9.9
+- **License**: Apache License 2.0
+- **URL**: https://github.com/hajimehoshi/ebiten
+- **用途**: 2D ゲームエンジン (描画 + 入力 + 透過ウィンドウ)
+
+### github.com/gen2brain/malgo — v0.11.25
+- **License**: Apache License 2.0
+- **URL**: https://github.com/gen2brain/malgo
+- **用途**: ミニオーディオバインディング (CGo, マイクキャプチャ)
+
+### github.com/ebitenui/ebitenui — v0.7.3
+- **License**: MIT
+- **URL**: https://github.com/ebitenui/ebitenui
+- **用途**: Ebitengine 用 UI ウィジェットライブラリ (Tweaks パネル)
+
+### golang.org/x/image — v0.42.0
+- **License**: BSD 3-Clause
+- **URL**: https://pkg.go.dev/golang.org/x/image
+- **用途**: WebP 画像デコード
+
+### gopkg.in/yaml.v3 — v3.0.1
+- **License**: MIT and Apache License 2.0 (dual license)
+- **URL**: https://github.com/go-yaml/yaml
+- **用途**: YAML 設定ファイル読み込み
+
+### golang.org/x/exp, golang.org/x/sync, golang.org/x/sys, golang.org/x/text
+- **License**: BSD 3-Clause
+- **URL**: https://pkg.go.dev/golang.org/x/...
+- **用途**: 標準ライブラリ拡張
+
+### github.com/ebitengine/purego, github.com/ebitengine/hideconsole
+- **License**: Apache License 2.0
+- **URL**: https://github.com/ebitengine
+- **用途**: Ebitengine 内部実装
+
+### github.com/go-text/typesetting
+- **License**: Unlicense OR BSD 3-Clause (dual)
+- **URL**: https://github.com/go-text/typesetting
+- **用途**: Unicode テキスト処理
+
+### github.com/rivo/uniseg
+- **License**: MIT
+- **URL**: https://github.com/rivo/uniseg
+- **用途**: Unicode テキストセグメンテーション
+
+### github.com/davecgh/go-spew
+- **License**: ISC
+- **URL**: https://github.com/davecgh/go-spew
+- **用途**: テスト用 pretty-print
+
+### github.com/frustra/bbcode
+- **License**: MIT
+- **URL**: https://github.com/frustra/bbcode
+- **用途**: BBCode パース (ebitenui テキスト装飾)
+
+### github.com/kr/text
+- **License**: Public Domain
+- **URL**: https://github.com/kr/text
+- **用途**: テキスト整形ヘルパー (ebitenui 依存)
+
+---
+
+## Runtime Embed Assets
+
+### Gen Interface JP v0.6.2 — `internal/tweaks/assets/fonts/GenInterfaceJP-Regular.ttf`
+- **License**: SIL Open Font License 1.1
+- **URL**: https://github.com/yamatoiizuka/gen-interface-jp
+- **Authors**: yamatoiizuka
+- **Note**: Inter (Inter Font License) + Noto Sans JP (SIL OFL) の合成フォント
+
+---
+
+## Development Tools (Python)
+
+### Pillow — 10.4.0
+- **License**: HPND (Historical Permission Notice and Disclaimer)
+- **URL**: https://python-pillow.org/
+- **用途**: スプライトシート生成 (`tools/genplaceholder/`)
+
+### numpy — 2.0.0
+- **License**: BSD 3-Clause
+- **URL**: https://numpy.org/
+- **用途**: 画像処理 (`tools/genplaceholder/`)
+
+---
+
+## ライセンス原文
+
+各プロジェクトのライセンス条文は以下で確認できます:
+
+```bash
+# Go modules
+go-licenses check ./...   # 要 go-licenses インストール
+
+# Python (tools/)
+pip show pillow numpy | grep License
+```
+
+最終更新: 2026-06-16
