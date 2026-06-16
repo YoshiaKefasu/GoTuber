@@ -5,8 +5,10 @@
 package main
 
 import (
+	"flag"
 	"log"
 	"os"
+	"path/filepath"
 
 	"github.com/YoshiaKefasu/GoTuber/internal/audio"
 	"github.com/YoshiaKefasu/GoTuber/internal/blink"
@@ -18,7 +20,41 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 )
 
+var (
+	flagTopmost = flag.Bool("topmost", false, "Always-on-top window (default: off; OBS captures regardless of Z-order)")
+	flagDebugBG = flag.Bool("debug-bg", false, "Disable ScreenTransparent (black background) for visual debugging")
+)
+
+func init() {
+	// 作業ディレクトリをプロジェクトのルート (= EXE の親ディレクトリ) に変更。
+	// ダブルクリック起動時 / タスクスケジューラ起動時に config/ assets/ への
+	// 相対パスが解決できるようする。
+	//
+	// 例: bin/gotuber.exe → cwd = bin の親 (プロジェクトルート)
+	//     gotuber.exe (プロジェクト直下) → cwd = プロジェクトルート
+	if exe, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exe)
+		// 親ディレクトリに config/default.yaml があればそこへ、なければ exeDir のまま
+		for _, candidate := range []string{filepath.Dir(exeDir), exeDir} {
+			if _, err := os.Stat(filepath.Join(candidate, "config", "default.yaml")); err == nil {
+				if err := os.Chdir(candidate); err != nil {
+					log.Printf("cwd: chdir %s failed: %v", candidate, err)
+				} else {
+					log.Printf("cwd: %s", candidate)
+				}
+				return
+			}
+		}
+		log.Printf("cwd: config/default.yaml not found near %s, using CWD %s", exeDir, exeDir)
+		if err := os.Chdir(exeDir); err != nil {
+			log.Printf("cwd: fallback chdir %s failed: %v", exeDir, err)
+		}
+	}
+}
+
 func main() {
+	flag.Parse()
+
 	// キャラクター設定読み込み
 	cfg, err := character.LoadConfig("config/default.yaml")
 	if err != nil {
@@ -65,12 +101,23 @@ func main() {
 	// ウィンドウ設定
 	ebiten.SetWindowTitle(game.WindowTitle())
 	ebiten.SetWindowSize(640, 480)
+	// ウィンドウ位置を画面中央寄りに明示 (デフォルト (0,0) だとタスクバー裏に隠れる)
+	ebiten.SetWindowPosition(200, 200)
+
+	// Ebitengine v2: デフォルトで floating=false (他ウィンドウの後ろにいける)
+	// --topmost フラグで明示的に ON にできる
+	ebiten.SetWindowFloating(*flagTopmost)
+	log.Printf("window floating (always-on-top): %v", *flagTopmost)
 
 	// 透過背景 + クリックスルー
 	//   - ScreenTransparent: RunGame 前
 	//   - SetWindowMousePassthrough: Update 初回内 (Issue #3222 対策)
+	screenTransparent := !*flagDebugBG
+	if !screenTransparent {
+		log.Printf("--debug-bg: 黒背景 fallback (透過 OFF)")
+	}
 	opts := &ebiten.RunGameOptions{
-		ScreenTransparent: true,
+		ScreenTransparent: screenTransparent,
 	}
 
 	// フォントロード (Gen Interface JP Regular 6.1MB embedded)

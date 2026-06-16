@@ -62,7 +62,9 @@ func New(
 func (g *Game) Update() error {
 	if g.firstUpdate {
 		g.firstUpdate = false
-		ebiten.SetWindowFloating(true)
+		// 透過ウィンドウの Z-Order は cmd/gotuber/main.go で
+		// ebiten.SetWindowFloating(*flagTopmost) を --topmost フラグ (default: false) により
+		// 制御する。Ebitengine v2 の透過ウィンドウは OS 仕様で Z-Order が上位に来るため。
 	}
 
 	// F1 で panel 表示切替 (単発検出)
