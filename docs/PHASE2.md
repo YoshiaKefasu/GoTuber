@@ -132,6 +132,17 @@ MediaPipe の Go バインディング (mediapipe-go) は experimental で Windo
 
 ### 4.4 必要な Python 依存
 
+**venv でカスタム環境を作成する** (Phase 2 で初めて Python 依存を導入するユーザー向けに推奨、YAGNI ではないが配布時の Python バージョン衝突を防ぐ):
+
+```bash
+# Phase 2 環境セットアップ (Phase 1 公開リリース後に追加される tools/setup-mp.sh / .ps1 で自動化)
+python -m venv .venv-mp
+source .venv-mp/bin/activate          # Linux / WSL / macOS
+.venv-mp\Scripts\Activate.ps1         # Windows PowerShell
+
+pip install -r tools/requirements-mp.txt
+```
+
 `tools/requirements-mp.txt`:
 ```
 mediapipe>=0.10.14
@@ -144,7 +155,20 @@ numpy>=1.26.0
 - mediapipe: ~50MB (pip install)
 - opencv-python: ~70MB
 - pyzmq: ~5MB
-- 合計 ~125MB の Python 環境 (Phase 2 ユーザー側セットアップ)
+- numpy: ~25MB (opencv-python と共有が多いが別途カウント)
+- 合計 ~150MB の Python 環境 (Phase 2 ユーザー側セットアップ、venv 隔離で既存環境と非衝突)
+
+**.gitignore 追加エントリ** (Phase 2 着手時に追加):
+```gitignore
+# Phase 2: MediaPipe Python サイドカー環境
+.venv-mp/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+```
+
+venv を `phase-2-mp` のような専用名にして Phase 1 と区別することで、ユーザーが既に持っている Python 環境 (例: Stable Diffusion 用の venv) との衝突を防ぐ。`__pycache__/` と `*.pyc` / `*.pyo` は mp_server.py のバイトコードキャッシュで、コミット不要。
 
 ---
 
