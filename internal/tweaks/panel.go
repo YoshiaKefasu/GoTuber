@@ -302,6 +302,19 @@ func (p *Panel) newDeviceCombo(entries []any) *widget.ListComboButton {
 				// ComboBox 再生成で発火)。Idle と同じ色でクリッピング形状を定義。
 				Mask: image.NewNineSliceColor(color.NRGBA{0x33, 0x3a, 0x44, 0xff}),
 			},
+			Slider: &widget.SliderParams{
+				TrackImage: &widget.SliderTrackImage{
+					Idle:  image.NewNineSliceColor(color.NRGBA{0x33, 0x3a, 0x44, 0xff}),
+					Hover: image.NewNineSliceColor(color.NRGBA{0x44, 0x4a, 0x54, 0xff}),
+				},
+				// Phase 1.14.12 fix: List の縦 Slider handle は Button として描画される。
+				// HandleImage 未設定だと ebitenui v0.7.3 の Button.draw() で nil panic する。
+				HandleImage: &widget.ButtonImage{
+					Idle:    image.NewNineSliceColor(color.NRGBA{0x5b, 0x66, 0x73, 0xff}),
+					Hover:   image.NewNineSliceColor(color.NRGBA{0x72, 0x7d, 0x8a, 0xff}),
+					Pressed: image.NewNineSliceColor(color.NRGBA{0x47, 0x52, 0x5f, 0xff}),
+				},
+			},
 			EntryFace: &faceIface,
 			EntryColor: &widget.ListEntryColor{
 				Selected:   color.NRGBA{0xdf, 0xf4, 0xff, 0xff},
