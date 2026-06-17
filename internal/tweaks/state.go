@@ -34,18 +34,43 @@ type State struct {
 	// UI 表示
 	PanelVisible bool // F1 で toggle
 
+	// Dirty は Tweaks パネルで未保存の変更があるかどうか。
+	// Phase 1.14.16: 明示的 Save ボタン方式 (自動 Save しない) の dirty flag。
+	//   - ChangedHandler (slider/checkbox) で true 化
+	//   - Save 成功 (TOML 書き出し完了) で false 化
+	//   - ApplyTo (起動時ロード) では変化しない (state は fresh)
+	//
+	// Quit / X ボタン押下時に true のままでも構わない (Save 押してない変更は破棄するのが仕様、
+	// docs/PHASE1.md Section 15.2 参照)。
+	Dirty bool
+
 	// Quit ボタンが押された
 	QuitRequested bool
 }
 
 // NewState はデフォルト値で State を作成する。
+//
+// Phase 1.14.16: Dirty=false 初期化 (Save 押してない変更なしの状態)。
 func NewState() *State {
 	return &State{
 		MouseResponsiveness: 0.3,
 		BlinkEnabled:        true,
 		AudioEnabled:        true,
 		// Phase 1.14.15: 15.0x → 10.0x に下げる (詳細は PHASE1.md Section 13.7 参照)。
-		AudioSensitivity:    10.0,
-		PanelVisible:        false,
+		AudioSensitivity: 10.0,
+		PanelVisible:     false,
+		Dirty:            false,
 	}
+}
+
+// ResetToDefaults は 4 つの永続化対象フィールドをデフォルト値に復元する (Phase 1.14.16 → Round 3 で YAGNI 削除)。
+//
+// 注意: このメソッドは Phase 1.14.16 Round 2 まで Reset ボタンから呼ばれていたが、
+// Round 3 で Reset ボタン自体が YAGNI 削除されたため、現バージョンでは呼ばれない。
+// 後方互換性のためメソッド自体は残しておく (将来別 Phase で必要になる可能性)。
+func (s *State) ResetToDefaults() {
+	s.MouseResponsiveness = 0.3
+	s.BlinkEnabled = true
+	s.AudioEnabled = true
+	s.AudioSensitivity = 10.0
 }

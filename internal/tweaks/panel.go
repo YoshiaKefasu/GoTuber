@@ -62,6 +62,25 @@ type Panel struct {
 	micSensitivityLabel *widget.Text // "Mic Sensitivity: 10.0x" 動的ラベル (Phase 1.14.15)
 	onDeviceSelected    func(deviceID string)
 	onRefreshDevices    func() []audio.Device
+
+	// Phase 1.14.16: Save ボタン + statusLabel 用フィールド。
+	// Dirty 化 (ChangedHandler 側) と Save 成功/失敗 status 表示。
+	// Reset 機能は YAGNI 削除 (Phase 1.14.16 Round 3): ebitenui slider の
+	// 内部 Render() が lastCurrent != Current で再 fire する問題を回避するため、
+	// RefreshWidgetsFromState() / mutingSliders / Checkbox 同期を全部捨てた。
+	saveBtn         *widget.Button
+	statusLabel     *widget.Text
+	statusMessage   string // SetStatus 経由での上書き、毎フレーム参照される
+	onSaveRequested func() error
+
+	// Phase 1.14.16: 起動時 ComboBox 初期選択同期用。
+	// main.go が NewPanel に渡した initialDeviceID を保持。
+	// SetDevices() の ComboBox 作成直後に selectDeviceByID() で適用。
+	initialDeviceID string
+
+	// Phase 1.14.16: ComboBox エントリを保持。SetDevices() で ComboBox 再作成後に
+	// selectDeviceByID() で初期選択するための検索対象。
+	currentEntries []any
 }
 
 // NewPanel は ebitenui を使った Tweaks パネルを構築する。
@@ -70,8 +89,16 @@ type Panel struct {
 // audioEnabled: マイクが利用可能な場合 true。false のとき Audio checkbox は操作不可、
 //
 //	ComboBox は "(unavailable)" 表示、Refresh は動く (OS に再列挙要求は有効)。
-func NewPanel(face *text.GoTextFace, state *State, audioEnabled bool) *Panel {
-	p := &Panel{state: state, face: face}
+//
+// initialDeviceID: Phase 1.14.16 で追加。TOML から復元した malgo デバイス ID。
+//
+//	空文字 = OS default。ComboBox 起動時選択をこれに同期する。
+func NewPanel(face *text.GoTextFace, state *State, audioEnabled bool, initialDeviceID string) *Panel {
+	p := &Panel{
+		state:           state,
+		face:            face,
+		initialDeviceID: initialDeviceID, // Phase 1.14.16: ComboBox 初期選択同期用
+	}
 	// ebitenui の *text.Face 期待 API に対応するため、interface 値をローカル変数に保持してアドレス取得
 	faceIface := text.Face(face)
 	facePtr := &faceIface
@@ -128,6 +155,8 @@ func NewPanel(face *text.GoTextFace, state *State, audioEnabled bool) *Panel {
 		widget.SliderOpts.FixedHandleSize(12),
 		widget.SliderOpts.ChangedHandler(func(args *widget.SliderChangedEventArgs) {
 			state.MouseResponsiveness = float64(args.Current) / 100.0
+			// Phase 1.14.16: スライダー変更は Dirty 化のみ。TOML 書込みは Save ボタン待ち。
+			state.Dirty = true
 		}),
 	)
 	root.AddChild(slider)
@@ -145,6 +174,8 @@ func NewPanel(face *text.GoTextFace, state *State, audioEnabled bool) *Panel {
 		widget.CheckboxOpts.InitialState(initialBlink),
 		widget.CheckboxOpts.StateChangedHandler(func(args *widget.CheckboxChangedEventArgs) {
 			state.BlinkEnabled = args.State == widget.WidgetChecked
+			// Phase 1.14.16: チェックボックス変更は Dirty 化のみ。
+			state.Dirty = true
 		}),
 	)
 	// checkbox + label を Row で並べる
@@ -167,6 +198,10 @@ func NewPanel(face *text.GoTextFace, state *State, audioEnabled bool) *Panel {
 	}
 	if !audioEnabled {
 		// マイク利用不可 → チェックボックスを無効化 (greyed 表示)
+		// Phase 1.14.16 (Critical #1 fix): tri-state 有効化が必須。
+		// ebitenui v0.7.3 checkbox.go:116-118 で
+		//   "non-tri state Checkbox cannot be in greyed state"
+		//   panic を回避するため TriState() を必ず付ける。
 		initialAudio = widget.WidgetGreyed
 	}
 	audioCheck := widget.NewCheckbox(
@@ -174,6 +209,7 @@ func NewPanel(face *text.GoTextFace, state *State, audioEnabled bool) *Panel {
 			Position: widget.RowLayoutPositionStart,
 		})),
 		widget.CheckboxOpts.Image(loadCheckboxImage()),
+		widget.CheckboxOpts.TriState(), // Phase 1.14.16: WidgetGreyed を使うため必須
 		widget.CheckboxOpts.InitialState(initialAudio),
 		widget.CheckboxOpts.StateChangedHandler(func(args *widget.CheckboxChangedEventArgs) {
 			// マイク無効時は変更を無視
@@ -181,6 +217,8 @@ func NewPanel(face *text.GoTextFace, state *State, audioEnabled bool) *Panel {
 				return
 			}
 			state.AudioEnabled = args.State == widget.WidgetChecked
+			// Phase 1.14.16: チェックボックス変更は Dirty 化のみ。
+			state.Dirty = true
 		}),
 	)
 	audioRow := widget.NewContainer(
@@ -225,6 +263,8 @@ func NewPanel(face *text.GoTextFace, state *State, audioEnabled bool) *Panel {
 		widget.SliderOpts.ChangedHandler(func(args *widget.SliderChangedEventArgs) {
 			// int 10..200 → float 1.0..20.0x。0.1 刻み。
 			state.AudioSensitivity = float64(args.Current) / 10.0
+			// Phase 1.14.16: スライダー変更は Dirty 化のみ。
+			state.Dirty = true
 		}),
 	)
 	root.AddChild(sensitivitySlider)
@@ -300,6 +340,51 @@ func NewPanel(face *text.GoTextFace, state *State, audioEnabled bool) *Panel {
 	p.micContainer = micContainer
 	p.micCombo = combo
 	p.refreshBtn = refreshBtn
+
+	// --- Phase 1.14.16: Save ボタン + statusLabel ---
+	// 起動直後は Dirty=false なので disable。ChangedHandler で Dirty=true になると enable。
+	// Reset ボタンは Round 3 で YAGNI 削除。
+	saveBtn := widget.NewButton(
+		widget.ButtonOpts.Image(&widget.ButtonImage{
+			Idle:    image.NewNineSliceColor(color.NRGBA{0x44, 0x66, 0x44, 0xff}),
+			Hover:   image.NewNineSliceColor(color.NRGBA{0x55, 0x77, 0x55, 0xff}),
+			Pressed: image.NewNineSliceColor(color.NRGBA{0x33, 0x55, 0x33, 0xff}),
+		}),
+		widget.ButtonOpts.Text("Save", facePtr, btnTextColor),
+		widget.ButtonOpts.TextPadding(&widget.Insets{Left: 20, Right: 20, Top: 5, Bottom: 5}),
+		widget.ButtonOpts.ClickedHandler(func(args *widget.ButtonClickedEventArgs) {
+			if !state.Dirty {
+				return
+			}
+			if p.onSaveRequested == nil {
+				return
+			}
+			// Save 処理 (TOML 書込み) は main.go 側でオーケストレート。
+			// エラー → statusLabel に "save failed: ..."、成功 → "saved" + Dirty=false。
+			if err := p.onSaveRequested(); err != nil {
+				p.SetStatus("save failed: " + err.Error())
+				return
+			}
+			state.Dirty = false
+			p.SetStatus("saved")
+		}),
+	)
+	saveBtn.GetWidget().Disabled = true // 起動直後は Dirty=false
+	p.saveBtn = saveBtn
+
+	// Phase 1.14.16 Round 3: Reset ボタンは YAGNI 削除。
+	// ebitenui slider の Render() が lastCurrent != Current で再 fire する
+	// 構造的問題があり、RefreshWidgetsFromState() 系の実装が根本的に難しい。
+	// 詳細は code-reviewer Round 2 REJECT フィードバック参照。
+	// 代替: dirty な変更を破棄したい場合は TOML を直接削除するか、
+	// 起動時の「設定確認あればロードするとなければデフォルトにします」動作を利用。
+	root.AddChild(saveBtn)
+
+	statusLabel := widget.NewText(
+		widget.TextOpts.Text(statusText(state), facePtr, labelColorDim),
+	)
+	root.AddChild(statusLabel)
+	p.statusLabel = statusLabel
 
 	// --- ヒント ---
 	root.AddChild(widget.NewText(
@@ -421,6 +506,36 @@ func (p *Panel) SetOnRefreshDevices(fn func() []audio.Device) {
 	p.onRefreshDevices = fn
 }
 
+// SetOnSaveRequested は Save ボタン押下時のコールバックを設定する (Phase 1.14.16)。
+// main.go 側で config.Save + state.Dirty=false + panel.SetStatus("saved") を実行する。
+// エラー時は statusLabel を "save failed: ..." に更新した上で err を返す。
+func (p *Panel) SetOnSaveRequested(fn func() error) {
+	p.onSaveRequested = fn
+}
+
+// SetStatus は statusLabel の文字列を更新する (Phase 1.14.16)。
+// 公開 setter 経由で更新することで Update() の毎フレーム再代入と競合しない。
+func (p *Panel) SetStatus(message string) {
+	p.statusMessage = message
+	if p.statusLabel != nil {
+		p.statusLabel.Label = message
+	}
+}
+
+// statusText は statusLabel に表示する文字列を返す (Phase 1.14.16)。
+// state.Dirty が true なら "unsaved changes"、それ以外なら空文字。
+//
+// 優先順位ロジックは Update() (panel.go:624 周辺) に集約されており、
+// statusMessage (SetStatus で保存された Save/エラー通知) を state.Dirty より優先表示する。
+// この関数自体は "unsaved changes" 表示の単機能。
+func statusText(state *State) string {
+	// 呼び出し側が p.statusMessage を保持しているので、ここでは state のみ参照。
+	if state.Dirty {
+		return "unsaved changes"
+	}
+	return ""
+}
+
 // SetDevices は ComboBox のエントリを新しいデバイス一覧で置き換える。
 // 呼び出しスレッド: ebitenui メインスレッドから (Refresh ボタン or Game.Update 内
 // dispatch)。ebitenui は goroutine safe ではないため、バックグラウンド goroutine
@@ -433,6 +548,10 @@ func (p *Panel) SetOnRefreshDevices(fn func() []audio.Device) {
 // Phase 1.13a Refresh: Refresh ボタンの ClickedHandler 内 (ebitenui メインスレッド)。
 //
 // devices に空配列を渡すと ComboBox は "(OS default)" のみになる。
+//
+// Phase 1.14.16: パネルに保存された initialDeviceID にマッチするエントリがあれば
+// ComboBox の初期選択をそれに同期する。TOML から復元したデバイス名で起動時に
+// 視覚確認できる。空文字 (= OS default) の場合は "(OS default)" エントリを選択。
 func (p *Panel) SetDevices(devices []audio.Device) {
 	if p.micContainer == nil {
 		return
@@ -447,6 +566,7 @@ func (p *Panel) SetDevices(devices []audio.Device) {
 	for _, d := range devices {
 		entries = append(entries, d)
 	}
+	p.currentEntries = entries // Phase 1.14.16: 初期選択用に保持
 	combo := p.newDeviceCombo(entries)
 	// ComboBox は micContainer の先頭 (Refresh ボタンの前) に配置
 	// ebitenui Container の AddChild は末尾追加なので、Refresh ボタンを
@@ -459,6 +579,31 @@ func (p *Panel) SetDevices(devices []audio.Device) {
 		p.micContainer.AddChild(p.refreshBtn)
 	}
 	p.micCombo = combo
+
+	// Phase 1.14.16: 初期 deviceID にマッチするエントリを選択。
+	// 起動時に TOML から復元した device_id を視覚確認できるようにする。
+	p.selectDeviceByID(p.initialDeviceID)
+}
+
+// selectDeviceByID は ComboBox のエントリから ID が一致するものを選択する (Phase 1.14.16)。
+// 空文字なら先頭の "(OS default)" を選択。一致なしなら何もしない。
+//
+// 注意: SetSelectedEntry() は内部で EntrySelectedEvent を発火するため、
+// main.go の SetOnDeviceSelected コールバック (Phase 1.13a / 1.14.7 で実装済) が
+// 呼ばれる。起動時 ComboBox 初期選択時、main.go の guard (currentDeviceID との
+// 一致チェック) で no-op になるので、Restart も Save も走らない。
+func (p *Panel) selectDeviceByID(deviceID string) {
+	if p.micCombo == nil || len(p.currentEntries) == 0 {
+		return
+	}
+	for _, e := range p.currentEntries {
+		if d, ok := e.(audio.Device); ok && d.ID == deviceID {
+			p.micCombo.SetSelectedEntry(e)
+			return
+		}
+	}
+	// 一致なし: 先頭 (OS default) を選択
+	p.micCombo.SetSelectedEntry(p.currentEntries[0])
 }
 
 // Update は毎フレーム呼ばれる。
@@ -474,6 +619,20 @@ func (p *Panel) Update() {
 		// スライダーの ChangedHandler は state.AudioSensitivity を更新するので、
 		// ここでは state から読んで Label に再代入する。
 		p.micSensitivityLabel.Label = micSensitivityLabelText(p.state)
+	}
+	if p.statusLabel != nil {
+		// Phase 1.14.16: status 表示更新。
+		// SetStatus で上書きされた statusMessage があればそれ、なければ state.Dirty から判定。
+		if p.statusMessage != "" {
+			p.statusLabel.Label = p.statusMessage
+		} else {
+			p.statusLabel.Label = statusText(p.state)
+		}
+	}
+	// Phase 1.14.16: Save ボタンの enable/disable を Dirty で切替。
+	// Disable 状態だとクリックイベントが発火しない (ebitenui widget convention)。
+	if p.saveBtn != nil {
+		p.saveBtn.GetWidget().Disabled = !p.state.Dirty
 	}
 	p.ui.Update()
 }

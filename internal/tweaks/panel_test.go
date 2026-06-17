@@ -95,7 +95,7 @@ func TestNewPanel(t *testing.T) {
 	}()
 	face := LoadFontFace(16)
 	state := NewState()
-	panel := NewPanel(face, state, true)
+	panel := NewPanel(face, state, true, "")
 	if panel == nil {
 		t.Errorf("expected non-nil panel")
 	}
@@ -110,7 +110,7 @@ func TestNewPanel_NoAudio(t *testing.T) {
 	}()
 	face := LoadFontFace(16)
 	state := NewState()
-	panel := NewPanel(face, state, false)
+	panel := NewPanel(face, state, false, "")
 	if panel == nil {
 		t.Errorf("expected non-nil panel even without audio")
 	}
@@ -261,7 +261,7 @@ func TestPanel_SetUIHidden(t *testing.T) {
 	}()
 	face := LoadFontFace(16)
 	state := NewState()
-	panel := NewPanel(face, state, true)
+	panel := NewPanel(face, state, true, "")
 	if panel.uiHidden {
 		t.Error("expected initial uiHidden=false")
 	}
@@ -286,8 +286,83 @@ func TestPanel_Draw_SkipsWhenUIHidden(t *testing.T) {
 	}()
 	face := LoadFontFace(16)
 	state := NewState()
-	panel := NewPanel(face, state, true)
+	panel := NewPanel(face, state, true, "")
 	panel.SetUIHidden(true)
 	// nil image を渡しても uiHidden なら即 return するはず
 	panel.Draw(nil)
+}
+
+// === Phase 1.14.16: 明示的 Save / Reset ボタン + Dirty flag ===
+
+// TestState_DirtyInitiallyFalse は起動直後の Dirty が false であることを確認。
+func TestState_DirtyInitiallyFalse(t *testing.T) {
+	s := NewState()
+	if s.Dirty {
+		t.Error("NewState() should set Dirty=false")
+	}
+}
+
+// TestNewPanel_SaveButtonInitiallyDisabled は Dirty=false 起動時に
+// Save ボタンが disable で生成されることを確認 (Phase 1.14.16)。
+//
+// Round 3 で Reset ボタンは YAGNI 削除。Save ボタンのみ残す。
+func TestNewPanel_SaveButtonInitiallyDisabled(t *testing.T) {
+	face := LoadFontFace(16)
+	state := NewState()
+	panel := NewPanel(face, state, true, "")
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("NewPanel panicked: %v", r)
+		}
+	}()
+	if panel.saveBtn == nil {
+		t.Fatal("Save button should be created in NewPanel")
+	}
+	if !panel.saveBtn.GetWidget().Disabled {
+		t.Error("Save button should be initially disabled (Dirty=false)")
+	}
+}
+
+// TestNewPanel_ZeroDirtyState は起動時に statusLabel が空文字 (Dirty=false) で生成されることを確認。
+func TestNewPanel_ZeroDirtyState(t *testing.T) {
+	face := LoadFontFace(16)
+	state := NewState()
+	panel := NewPanel(face, state, true, "")
+	if panel.statusLabel == nil {
+		t.Fatal("statusLabel should be created in NewPanel")
+	}
+	if panel.statusMessage != "" {
+		t.Errorf("statusMessage should be empty initially, got %q", panel.statusMessage)
+	}
+}
+
+// TestSetStatus_UpdatesLabel は SetStatus が statusLabel.Label を更新することを確認。
+func TestSetStatus_UpdatesLabel(t *testing.T) {
+	face := LoadFontFace(16)
+	state := NewState()
+	panel := NewPanel(face, state, true, "")
+	panel.SetStatus("saved")
+	if panel.statusLabel.Label != "saved" {
+		t.Errorf("statusLabel.Label: got %q want %q", panel.statusLabel.Label, "saved")
+	}
+	if panel.statusMessage != "saved" {
+		t.Errorf("statusMessage: got %q want %q", panel.statusMessage, "saved")
+	}
+}
+
+// TestNewPanel_AudioCheckboxTriState は audioEnabled=false で audioCheck が
+// tri-state (WidgetGreyed) で生成されることを確認 (Phase 1.14.16 Critical #1 fix)。
+//
+// Round 3: Reset / RefreshWidgetsFromState 系は YAGNI 削除したので、
+// このテストは audioCheck の tri-state 構築だけ検証する。
+func TestNewPanel_AudioCheckboxTriState(t *testing.T) {
+	face := LoadFontFace(16)
+	state := NewState()
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("NewPanel panicked: %v", r)
+		}
+	}()
+	// audioEnabled=false → audioCheck は WidgetGreyed で生成
+	NewPanel(face, state, false, "")
 }

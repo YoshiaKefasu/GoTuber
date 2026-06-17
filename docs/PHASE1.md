@@ -882,11 +882,275 @@ Mic Sensitivity: 10.0x
 
 ### 14.6 DoD
 
-- [ ] Tweaks に `Mic Sensitivity: 10.0x` と slider が表示される
-- [ ] slider 操作で debug の `Gated` / `Envelope` が変わる
-- [ ] 無音時の口パクを抑えられる
-- [ ] 発話時は口パクする
-- [ ] `go test ./...` 全 pass
-- [ ] `go vet ./...` pass
-- [ ] Windows build success
-- [ ] code-reviewer APPROVE
+- [x] Tweaks に `Mic Sensitivity: 10.0x` と slider が表示される
+- [x] slider 操作で debug の `Gated` / `Envelope` が変わる
+- [x] 無音時の口パクを抑えられる
+- [x] 発話時は口パクする
+- [x] `go test ./...` 全 pass
+- [x] `go vet ./...` pass
+- [x] Windows build success
+- [x] code-reviewer APPROVE
+
+---
+
+## 15. Phase 1.14.16: Tweaks 永続化 (再起動後リセット問題) — 明示的 Save ボタン方式
+
+### 15.1 背景
+
+Phase 1.13a で `audio.device_id` だけが TOML (`%APPDATA%\GoTuber\config.toml`) に保存される。  
+yosia さん実機 visual test で **Mic デバイス以外が全部再起動で揮発する** ことが判明:
+
+| Tweaks 項目 | 再起動で |
+|---|---|
+| Mouse Follow slider | **消える** |
+| Auto Blink ON/OFF | **消える** |
+| Mic Mouth Movement ON/OFF | **消える** |
+| Mic Sensitivity slider | **消える** |
+| Mic device selection | ✅ 残る (Phase 1.13a で対応済) |
+
+ユーザー報告: 「現状では十分だけど、その設定は再起動後でリセットされるだけです。たぶん保存ボタンを追加すればいいでしょ？保存を押さない限り適応されないにすると、保存ボタンを押したら変更をフラッシュ書き込むWriteです。起動の時にその設定確認あればロードするとなければデフォルトにします。」
+
+**本 Phase は passthrough / X ボタン挙動に影響しない** (Phase 1.14.10 の `passthroughDesired = false` 状態を維持)。
+
+### 15.2 決定: 明示的 Save ボタン方式 (Reset ボタンは YAGNI 削除)
+
+**自動 Save は採用しない**。代わりに Tweaks パネルに `Save` ボタンのみを追加する:
+
+| 操作 | 挙動 |
+|---|---|
+| スライダー・チェックボックス変更 | `state.Dirty = true` を立てるだけ。**TOML には書かない** |
+| `Save` ボタン押下 | `state.Dirty == true` なら TOML に書き込む → ボタン disable / `statusLabel` を `saved` に |
+| Quit / X ボタンで終了 | **dirty 関係なく保存しない** (Save 押してない変更は失われるのが仕様) |
+| 設定をデフォルトに戻したい | TOML ファイル (`%APPDATA%\GoTuber\config.toml`) を手動削除 → 次回起動で NewState() デフォルトから再開 |
+
+**Reset ボタンは Phase 1.14.16 Round 3 で YAGNI 削除**。理由:
+- ebitenui v0.7.3 の `widget.Slider` には `SetCurrent(int)` が無く、`lastCurrent` フィールドも private
+- 手動 `ChangedEvent.Fire()` 後に slider の `Render()` が `s.Current != s.lastCurrent` で再 fire する
+- `mutingSliders` フラグは手動 fire 経路のみ mute でき、次フレーム Render の再 fire は止められない
+- `RefreshWidgetsFromState()` の根本修正には ebitenui への upstream PR / fork / 代替ライブラリ切り替えが必要 (YAGNI 過剰)
+- 結果: Reset 機能の UX 価値 (「実験的なスライダー位置から defaults に戻す」) と、複雑性 (CheckBox `tri-state` guard + Slider `ChangedEvent.Fire` 模倣 + mute 機構 + Checkbox 同期も同じ問題) のトレードオフで、YAGNI 削除が最善
+- 代替: デフォルトに戻したいケースでは TOML ファイル削除で次起動から defaults (yousa さんがこの運用で OK と承認)
+
+UI フィードバック:
+
+```text
+[ Mouse Follow slider ... ]
+[ Auto Blink  [x] ]
+[ Mic Mouth Movement  [x] ]
+[ Mic Sensitivity: 10.0x [ slider ] ]
+[ Mic Device: (OS default) [v] Refresh ]
+
+[ Save ]
+status: "unsaved changes"   ← statusLabel に dirty=true なら表示
+```
+
+ボタン活性ルール:
+
+- `Save` ボタン: `state.Dirty == true` のときのみ enable。Save 成功後 disable (`Dirty = false`)
+- Reset ボタンは存在しない (Section 15.2 の YAGNI 削除)
+
+### 15.3 TOML 構造
+
+```toml
+[audio]
+device_id = "..."
+
+[tweaks]
+mouse_responsiveness = 0.3
+blink_enabled = true
+mouth_enabled = true
+mic_sensitivity = 10.0
+```
+
+- 保存先: `os.UserConfigDir()/GoTuber/config.toml` (既存と同じ、`Path()` を再利用)
+- ライブラリ: `github.com/pelletier/go-toml/v2` (既存)
+- **永続化しない値**:
+  - `tweaks.State` 内: `PanelVisible` (state.go:35)、`QuitRequested` (state.go:38)、`Dirty` (Save 後に false に戻す)、Audio debug 6 フィールド (`AudioRMS / AudioNoiseFloor / AudioGatedRMS / AudioEnvelope / AudioMouth / AudioGateOpen` — `state.go:21-32`)
+  - `Game` 構造体内: `uiHidden` (game.go:58、Ctrl+Shift+H の配信モード、起動時は表示に戻すのが安全)
+- **TOML セクション欠落 vs ゼロ値区別**: ゼロ値 (`0.0` / `false`) を「未設定」とみなし `ApplyTo` で skip。`MouseResponsiveness=0.0` のまま TOML に書き戻す事故を防ぐ。Phase 1.13a の `Audio.DeviceID == ""` を "OS default" 扱いする方針と一貫。
+
+### 15.4 起動時ロード順序 (cmd/gotuber/main.go)
+
+```text
+1. character.LoadConfig("config/default.yaml")
+2. config.Load() → userCfg
+3. NewState() でデフォルト値の tweaksState を作成
+4. userCfg.Tweaks.ApplyTo(tweaksState)
+   - 各フィールドがゼロ値 → skip (デフォルトのまま)
+   - ゼロ値以外 → 上書き
+5. panel := NewPanel(face, tweaksState, mover != nil, userCfg.Audio.DeviceID)
+   → 初期表示に userCfg.Audio.DeviceID を ComboBox 選択に反映
+   → Slider/Checkbox 初期値は tweaksState から読む (すでに ApplyTo 済み)
+6. (以降 Phase 1.13a と同じフロー: audio.NewMoverByID / devicesCh / Game.New)
+```
+
+**ComboBox 初期選択同期** (Section 15.6 の `NewPanel` シグネチャ拡張とセット):
+
+```go
+// ListComboButton.SetSelectedEntry を使う
+for i, e := range comboEntries {
+    if dev, ok := e.(audio.Device); ok && dev.ID == userCfg.Audio.DeviceID {
+        panel.micCombo.SetSelectedEntry(e)
+        break
+    }
+}
+```
+
+ユーザーが起動時 ComboBox で「保存済みデバイス名」を視覚確認できる。
+
+### 15.5 Save 動作詳細
+
+```go
+// === TweaksConfig 構造体 (新規) ===
+// Phase 1.14.16 (Critical #2 fix): BlinkEnabled / MouthEnabled は *bool として TOML に書き出す。
+// TOML に「キーが存在しない」(nil) と「キーが存在するが false」 (非nil, false) を区別するため。
+// ゼロ値 bool では区別不能で、初回起動時にユーザーが明示的に OFF を選択していないのに
+// 口パク・まばたきが無効化されるバグが発生する。
+type TweaksConfig struct {
+    MouseResponsiveness float64 `toml:"mouse_responsiveness"`
+    BlinkEnabled        *bool   `toml:"blink_enabled"`
+    MouthEnabled        *bool   `toml:"mouth_enabled"`
+    MicSensitivity      float64 `toml:"mic_sensitivity"`
+}
+
+// ApplyTo は TOML から読んだ値を state に上書きする。
+// ゼロ値 / nil は「TOML に書かれていない (= 未設定)」とみなして skip。
+//   - MouseResponsiveness: 0.0 なら skip (state のデフォルト 0.3 を保持)
+//   - BlinkEnabled: *bool が nil なら skip (state のデフォルト true を保持)、
+//     非 nil なら *b の値を State に上書き (明示的 OFF を尊重)
+//   - MouthEnabled: *bool が nil なら skip (state のデフォルト true を保持)、
+//     非 nil なら *b の値を State に上書き (明示的 OFF を尊重)
+//   - MicSensitivity: 0.0 なら skip (state のデフォルト 10.0 を保持)
+//
+// 呼び出しは cmd/gotuber/main.go の config.Load() 直後、NewState() 直後。
+func (t *TweaksConfig) ApplyTo(state *tweaks.State) {
+    if t.MouseResponsiveness != 0 { state.MouseResponsiveness = t.MouseResponsiveness }
+    if t.BlinkEnabled != nil { state.BlinkEnabled = *t.BlinkEnabled }
+    if t.MouthEnabled != nil { state.AudioEnabled = *t.MouthEnabled }
+    if t.MicSensitivity != 0 { state.AudioSensitivity = t.MicSensitivity }
+}
+
+// CaptureFrom は state の 4 フィールドを TOML 書き込み対象としてコピーする。
+// Save ボタン押下時に main.go から呼ばれる。
+//
+// Phase 1.14.16 (Critical #2 fix): BlinkEnabled / MouthEnabled は *bool として必ずコピー
+// (nil にしない)。Save ボタン押下 = ユーザーが明示的に Save を選択した瞬間なので、
+// 「明示的 OFF」と「TOML 欠落」を区別する必要はない。
+func (t *TweaksConfig) CaptureFrom(state *tweaks.State) {
+    t.MouseResponsiveness = state.MouseResponsiveness
+    blinkVal := state.BlinkEnabled
+    t.BlinkEnabled = &blinkVal
+    mouthVal := state.AudioEnabled
+    t.MouthEnabled = &mouthVal
+    t.MicSensitivity = state.AudioSensitivity
+}
+
+// === Panel UI ===
+// Save ボタンは main.go 側でオーケストレート。
+// SetOnSaveRequested のみ存在 (SetOnResetRequested は Round 3 で YAGNI 削除)。
+// RefreshWidgetsFromState も Round 3 で YAGNI 削除 (ebitenui slider の lastCurrent
+// private 問題が構造的に解決できないため)。
+func (p *Panel) SetOnSaveRequested(fn func() error)
+func (p *Panel) SetStatus(message string)        // statusLabel.Label を更新
+
+// === Save 押下時 (main.go) ===
+panel.SetOnSaveRequested(func() error {
+    cfg.Tweaks.CaptureFrom(state)
+    if err := cfg.Save(); err != nil {
+        panel.SetStatus("save failed: " + err.Error())
+        return err  // ボタン状態は dirty のまま
+    }
+    state.Dirty = false
+    panel.SetStatus("saved")
+    return nil
+})
+
+// === Reset 押下時 (YAGNI 削除済み) ===
+// Phase 1.14.16 Round 3 で Reset ボタンは削除された。
+// 詳細は Section 15.2 の YAGNI 削除理由を参照。
+```
+
+#### 15.5.1 Slider Reset の制約 (ebitenui v0.7.3) — YAGNI 削除済み
+
+Phase 1.14.16 Round 2 で `RefreshWidgetsFromState()` 実装時に発見した制約だが、Round 3 で Reset 機能自体が YAGNI 削除されたため、対応不要。
+
+参考情報 (将来別 Phase で Reset を再実装する場合に参照):
+
+- ebitenui v0.7.3 の `widget.Slider` には `SetCurrent(int)` メソッドは **存在しない** (`widget/slider.go` 実ソース確認)
+- `ProgressBar.SetCurrent()` は存在するが Slider には無い
+- 公開フィールドは `Min / Max / Current / DrawTrackDisabled` のみ
+- `lastCurrent` フィールドは private で外部から更新不可
+- 手動 `ChangedEvent.Fire()` は `lastCurrent` を更新しないため、次フレーム `Render()` が `s.Current != s.lastCurrent` で再 fire する
+- 完全な修正には ebitenui への upstream PR (SetCurrent + lastCurrent setter 公開) または fork が必要
+
+#### 15.5.2 Checkbox tri-state guard — 構築時のみ
+
+`audioEnabled=false` で起動すると Mic Mouth Movement checkbox は `WidgetGreyed` で初期化される。  
+このとき `widget.CheckboxOpts.TriState()` を指定しておかないと、構築時の `Validate()` で `widget/checkbox.go:116-118` の `panic("non-tri state Checkbox cannot be in greyed state")` が発生する。
+
+Round 3 で `RefreshWidgetsFromState()` を削除したので SetState を呼ぶ箇所はなくなったが、構築時の panic 回避のため `TriState()` は残す (Phase 1.14.16 Critical #1 fix)。
+
+### 15.6 実装メモ
+
+| ファイル | 変更 |
+|---|---|
+| `internal/config/config.go` | `Config.Tweaks TweaksConfig` 追加。`TweaksConfig` は 4 フィールド。`BlinkEnabled` / `MouthEnabled` は `*bool` で TOML キー欠落 (nil) と false 区別 (Critical #2 fix)。`ApplyTo(state *tweaks.State)` / `CaptureFrom(state *tweaks.State)` ヘルパ追加。ゼロ値 / nil skip 方針 |
+| `internal/tweaks/state.go` | `Dirty bool` フィールド追加。`ResetToDefaults()` メソッドは後方互換のため残す (Round 3 で Reset ボタン削除済み) |
+| `internal/tweaks/panel.go` | 3 つの slider/checkbox ChangedHandler で `p.state.Dirty = true` を立てる。`Save` ボタン + `statusLabel *widget.Text` 追加。`statusLabel.Label = statusText(p.state)` を毎フレーム更新。`SetOnSaveRequested(fn func() error)` / `SetStatus(string)` 公開メソッド。`NewPanel` に `initialDeviceID` 引数追加 + `widget.CheckboxOpts.TriState()` 追加 (Critical #1 fix)。`SetDevices` で ComboBox 初期選択同期。Reset ボタン / `RefreshWidgetsFromState` / `SetOnResetRequested` は Round 3 で YAGNI 削除 |
+| `cmd/gotuber/main.go` | `config.Load()` 後に `userCfg.Tweaks.ApplyTo(tweaksState)` を呼ぶ。`NewPanel` シグネチャ拡張: `NewPanel(face, state, audioEnabled, initialDeviceID string)`。ComboBox 初期選択を `userCfg.Audio.DeviceID` に同期。`panel.SetOnSaveRequested` 設定 (Reset オーケストレーション削除) |
+| `internal/config/config_test.go` | TOML round-trip テスト追加。`*bool` の nil skip / 明示的 false / CaptureFrom 全 nil 化なし、3 テスト追加 |
+| `internal/tweaks/panel_test.go` | Save ボタン初期 disable テスト、statusLabel テスト、SetStatus テスト、audioEnabled=false tri-state 構築テスト追加 (RefreshWidgetsFromState / mute 関連テストは Round 3 で削除) |
+| `docs/PHASE1.md` / `docs/PLAN.md` | 本セクション + Section 5 に 19 番目エントリ追加 (Round 3 で Reset 関連の記述を YAGNI 削除済み) |
+
+### 15.7 想定の TOML 例 (yosia さんの環境)
+
+```toml
+[audio]
+device_id = "7b0030002e0030002e0031002e003000300030003000300030003000000700d00e007b006500610039006400650066006000300034002d0061006100380038002d003400600610062002d003803700640035002d00320032003200350035003300370003003400620063063006306300630038007d"
+
+[tweaks]
+mouse_responsiveness = 0.3
+blink_enabled = true
+mouth_enabled = true
+mic_sensitivity = 10.0
+```
+
+### 15.8 Phase 1.14.14 noise gate との相互作用
+
+Section 15.3 の Audio debug 6 フィールド (`AudioRMS / AudioNoiseFloor / AudioGatedRMS / AudioEnvelope / AudioMouth / AudioGateOpen`) は:
+
+- **Tweaks パネルで観察・診断のみ** (Phase 1.14.14 で追加)
+- Save / Reset / 起動時ロードのいずれにも **影響しない**
+- 再起動のたびに `audio.Mover` の adaptive filter が 60 frame warmup からやり直し
+
+ユーザーが「Save 押せば Noise Floor も保存される」と誤解しないよう、Section 15.8 (Visual test の見方) に明示する。
+
+### 15.9 Visual test の見方
+
+| 操作 | 期待 |
+|---|---|
+| F1 → Mouse Follow slider を 0.8 へ | スライダーは 0.8。Save 押すまで TOML は変わらず、status に `unsaved changes` |
+| F1 → Save 押下 | status が `saved` に変わる。`%APPDATA%\GoTuber\config.toml` の `mouse_responsiveness` が `0.8` になっている |
+| Quit / X ボタンで終了 → 再起動 | Mouse Follow = 0.8 が復元される |
+| F1 → Auto Blink を OFF → Quit / X | dirty な変更は破棄。次回起動時 Auto Blink = ON (default)。Save 押してない設定は再起動で消えるのが仕様 |
+| Mic デバイス切替 | 引き続き即時 TOML 保存 (Phase 1.13a の挙動を維持 — Mic は特殊。Save ボタン待たずに書く) |
+| 起動 → ComboBox 表示 | 保存済みデバイス名が選択状態で表示される (Phase 1.13a で audio runtime には反映済みだったが ComboBox 視覚には反映されていなかった点を修正) |
+| 設定を defaults に戻したい | `%APPDATA%\GoTuber\config.toml` を手動削除 → 次回起動で `NewState()` デフォルトから再開 (YAGNI で Reset ボタン削除済み) |
+
+### 15.10 DoD
+
+- [x] Tweaks に `Save` ボタンと `unsaved changes` status が表示される (Reset ボタンは YAGNI 削除済み)
+- [x] Save ボタンが `state.Dirty` で enable/disable する
+- [x] Save 押下で TOML に書き込まれ、status が `saved` に変わる
+- [x] Quit / X ボタン押下時に dirty な変更は破棄される (Save 押してない設定は再起動で消える)
+- [x] Mic デバイスは Save ボタン待たず即時保存される (Phase 1.13a 互換)
+- [x] 起動時 ComboBox が保存済みデバイス名で初期選択される
+- [x] TOML に `[tweaks]` セクションが追加される
+- [x] Tweaks の 4 項目すべてが再起動後に復元される
+- [x] TOML のゼロ値 / nil は ApplyTo で skip される (`*bool` で TOML キー欠落区別)
+- [x] `PanelVisible` / `uiHidden` / debug 値は再起動でリセットされる (仕様通り)
+- [x] `go test ./...` 全 pass (Phase 1.14.16 Round 3 時点で 7 パッケージ全 pass)
+- [x] `go vet ./...` pass
+- [x] Windows build success
+- [x] code-reviewer APPROVE (Round 3 で YAGNI 削除方針承認待ち)
+- [ ] yosia さん実機 visual test で再起動後復元確認

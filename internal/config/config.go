@@ -7,6 +7,10 @@
 //
 // Phase 1.13a: マイクデバイス選択を永続化。TOML ライブラリは
 // github.com/pelletier/go-toml/v2 (active maintenance, modern API)。
+//
+// Phase 1.14.16: Tweaks 4 フィールド (mouse_responsiveness / blink_enabled /
+// mouth_enabled / mic_sensitivity) を `[tweaks]` セクションへ追加。明示的
+// Save ボタン押下時のみ書き込む。ApplyTo はゼロ値を「TOML 未設定」とみなし skip。
 package config
 
 import (
@@ -14,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/YoshiaKefasu/GoTuber/internal/tweaks"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -22,6 +27,10 @@ import (
 type Config struct {
 	// Audio は [audio] セクション。
 	Audio AudioConfig `toml:"audio"`
+
+	// Tweaks は [tweaks] セクション。Phase 1.14.16 で追加。
+	// Save ボタン押下時のみ書き込まれ、起動時に ApplyTo 経由で State へ反映される。
+	Tweaks TweaksConfig `toml:"tweaks"`
 }
 
 // AudioConfig は [audio] セクションのフィールド。
@@ -32,6 +41,38 @@ type AudioConfig struct {
 	// 表示名が重複するデバイス (例: 同じ "USB Microphone" が複数)
 	// 環境でも ID で一意に識別・復元できる。
 	DeviceID string `toml:"device_id"`
+}
+
+// TweaksConfig は [tweaks] セクションのフィールド (Phase 1.14.16)。
+//
+// TOML 上のフィールドはユーザーが編集可能だが、Go 側では State への
+// 適用時 (ApplyTo) と TOML 書き出し時 (CaptureFrom) のみアクセスする。
+// GUI (F1 Tweaks パネル) からの設定変更は state を経由し、Save ボタン押下
+// で初めてここへコピーされる。
+//
+// Phase 1.14.16 (Critical #2 fix): BlinkEnabled / MouthEnabled は *bool。
+// TOML に「キーが存在しない」 (nil) と「キーが存在するが false」 (非nil, false)
+// を区別するため。bool のゼロ値 (= false) では区別不能で、初回起動時に
+// ユーザーが明示的に OFF を選択していないのに口パク・まばたきが無効化される
+// バグが発生する。
+type TweaksConfig struct {
+	// MouseResponsiveness: 0.05..1.0。int 値域 5..100 を内部で /100.0 換算。
+	// ゼロ値は「TOML に書かれていない (= 未設定)」とみなして ApplyTo で skip する。
+	MouseResponsiveness float64 `toml:"mouse_responsiveness"`
+
+	// BlinkEnabled: 自動まばたき有効化。*bool で TOML キー欠落 (nil) と false を区別。
+	// nil なら ApplyTo skip (State のデフォルト true を保持)。
+	// 非 nil なら *b の値を State に上書き (明示的 OFF を尊重)。
+	BlinkEnabled *bool `toml:"blink_enabled"`
+
+	// MouthEnabled: 口パク有効化。*bool で TOML キー欠落 (nil) と false を区別。
+	// nil なら ApplyTo skip (State のデフォルト true を保持)。
+	// 非 nil なら *b の値を State に上書き (明示的 OFF を尊重)。
+	MouthEnabled *bool `toml:"mouth_enabled"`
+
+	// MicSensitivity: 1.0..20.0 (UI int 10..200 を内部で /10.0 換算)。
+	// ゼロ値は「未設定」とみなし ApplyTo で skip。
+	MicSensitivity float64 `toml:"mic_sensitivity"`
 }
 
 // Path は設定ファイルの絶対パスを返す。
@@ -92,4 +133,45 @@ func (c *Config) Save() error {
 		return fmt.Errorf("config: write %s: %w", path, err)
 	}
 	return nil
+}
+
+// ApplyTo は TOML から読んだ値を state に上書きする。
+//
+// Phase 1.14.16: ゼロ値 / nil は「TOML に書かれていない (= 未設定)」とみなして skip。
+//   - MouseResponsiveness: 0.0 なら skip (state のデフォルト 0.3 を保持)
+//   - BlinkEnabled: *bool が nil なら skip (state のデフォルト true を保持)、
+//     非 nil なら *b の値を上書き (明示的 OFF を尊重)
+//   - MouthEnabled: *bool が nil なら skip (state のデフォルト true を保持)、
+//     非 nil なら *b の値を上書き (明示的 OFF を尊重)
+//   - MicSensitivity: 0.0 なら skip (state のデフォルト 10.0 を保持)
+//
+// 呼び出しは cmd/gotuber/main.go の config.Load() 直後、NewState() 直後。
+func (t *TweaksConfig) ApplyTo(state *tweaks.State) {
+	if t.MouseResponsiveness != 0 {
+		state.MouseResponsiveness = t.MouseResponsiveness
+	}
+	if t.BlinkEnabled != nil {
+		state.BlinkEnabled = *t.BlinkEnabled
+	}
+	if t.MouthEnabled != nil {
+		state.AudioEnabled = *t.MouthEnabled
+	}
+	if t.MicSensitivity != 0 {
+		state.AudioSensitivity = t.MicSensitivity
+	}
+}
+
+// CaptureFrom は state の 4 フィールドを TOML 書き込み対象としてコピーする。
+// Save ボタン押下時に main.go から呼ばれる。
+//
+// Phase 1.14.16: BlinkEnabled / MouthEnabled は *bool として必ずコピー (nil にしない)。
+// Save ボタン押下 = ユーザーが明示的に Save を選択した瞬間なので、「明示的 OFF」
+// と「TOML 欠落」を区別する必要はない。State の bool をそのまま & でラップ。
+func (t *TweaksConfig) CaptureFrom(state *tweaks.State) {
+	t.MouseResponsiveness = state.MouseResponsiveness
+	blinkVal := state.BlinkEnabled
+	t.BlinkEnabled = &blinkVal
+	mouthVal := state.AudioEnabled
+	t.MouthEnabled = &mouthVal
+	t.MicSensitivity = state.AudioSensitivity
 }

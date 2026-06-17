@@ -97,6 +97,11 @@ func main() {
 		log.Printf("config loaded: audio.device_id = %s", userCfg.Audio.DeviceID)
 	}
 
+	// Phase 1.14.16: Tweaks 永続化の起動時ロード。TOML の [tweaks] セクションから
+	// 4 フィールドを state に上書き。ゼロ値 (= TOML 未設定) は skip。
+	tweaksState := tweaks.NewState()
+	userCfg.Tweaks.ApplyTo(tweaksState)
+
 	// マイクキャプチャ開始（失敗時は口パク無効で続行）
 	// Phase 1.13a: 設定のデバイス ID を malgo に渡す
 	mover, err := audio.NewMoverByID(userCfg.Audio.DeviceID)
@@ -141,9 +146,8 @@ func main() {
 	face := tweaks.LoadFontFace(16)
 	log.Printf("font loaded: Gen Interface JP Regular (16px)")
 
-	// Tweaks パネル
-	tweaksState := tweaks.NewState()
-	panel := tweaks.NewPanel(face, tweaksState, mover != nil)
+	// Tweaks パネル (Phase 1.14.16: initialDeviceID を ComboBox 初期選択に渡す)
+	panel := tweaks.NewPanel(face, tweaksState, mover != nil, userCfg.Audio.DeviceID)
 	log.Printf("tweaks panel: F1 to toggle (audio checkbox: %s)", func() string {
 		if mover != nil {
 			return "enabled"
@@ -208,6 +212,19 @@ func main() {
 		}
 		log.Printf("device refresh: %d devices", len(devices))
 		return devices
+	})
+
+	// Phase 1.14.16: Save ボタン押下時のオーケストレーション。
+	// main.go が config.Save + state.Dirty=false を担当。
+	// panel 側はエラー時 status 文字列を内部で更新、成功時は呼び出し側で Dirty=false + "saved"。
+	panel.SetOnSaveRequested(func() error {
+		userCfg.Tweaks.CaptureFrom(tweaksState)
+		if err := userCfg.Save(); err != nil {
+			log.Printf("config save failed: %v", err)
+			return err
+		}
+		log.Printf("config saved: tweaks.* (%d fields captured)", 4)
+		return nil
 	})
 
 	// Phase 1.13a P-5: 起動時バックグラウンドで WASAPI 遅延初期化対策として
