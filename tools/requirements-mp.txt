@@ -1,0 +1,10 @@
+# Phase 2 用 MediaPipe サイドカー依存
+# pip install -r tools/requirements-mp.txt
+# セットアップ手順: docs/PHASE2.md 4.4 参照
+# 注意: Phase 1 (Go バイナリ) の動作には不要。Phase 2 で初めて使う。
+# Go 側の追加依存 (github.com/pebbe/zmq4) は Phase 2.3 で go.mod に追加予定。
+
+mediapipe>=0.10.14,<0.11
+opencv-python>=4.10.0,<5
+pyzmq>=26.0,<27
+numpy>=1.26.0,<2.0

@@ -46,3 +46,11 @@ uploads/
 # Real-ESRGAN / NCNN binaries (download manually, see docs/01_画像生成用プロンプト.txt Section [6])
 tools/models/
 /*.ncnn-*
+
+# Phase 2: MediaPipe Python サイドカー環境
+# (.venv-mp/ はディレクトリ名のみで Windows / Unix 両対応)
+.venv-mp/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
