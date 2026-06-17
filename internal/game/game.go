@@ -96,6 +96,17 @@ func New(
 func (g *Game) Update() error {
 	if g.firstUpdate {
 		g.firstUpdate = false
+		// Phase 1.14.9: firstUpdate で明示的に passthrough を確定。
+		// Phase 1.13a/b (508f630) で applyPassthrough() を導入した際、
+		// firstUpdate から SetWindowMousePassthrough(true) の直接呼び出しが消えた結果、
+		// Ebitengine v2 + ScreenTransparent:true のデフォルト passthrough=true に
+		// 暗黙依存していた。F1 押下後の SetWindowMousePassthrough(false) の効果が
+		// Ebitengine v2 GLFW バックエンドで遅延する場合があり、X / 最小化 / 最大化
+		// ボタンクリックが通過する症状が出た (Phase 1.14.8 visual test で発覚)。
+		// firstUpdate で applyPassthrough() を 1 回呼ぶことで初期状態を確定させる。
+		// 起動時 PanelVisible=false (Go ゼロ値) → passthrough=true → Phase 1.2 と同じ初期状態。
+		g.applyPassthrough()
+
 		// 透過ウィンドウの Z-Order は cmd/gotuber/main.go で
 		// ebiten.SetWindowFloating(*flagTopmost) を --topmost フラグ (default: false) により
 		// 制御する。Ebitengine v2 の透過ウィンドウは OS 仕様で Z-Order が上位に来るため。
