@@ -100,34 +100,40 @@ python tools/build_default_character.py <入力フォルダ> \
 
 **工数**: 4-6 時間
 
-### 1.6. UI 改善: 左上設定ボタン + Ctrl+Shift+H で UI 表示/非表示 (ユーザー要望 2026-06-17)
+### 1.6. UI 改善: 左上設定ボタン常駐 + Ctrl+Shift+H で設定ボタンのみ表示/非表示 (ユーザー要望 2026-06-17)
 
-**背景**: yosia さんから「キャラクターの左上に設定ボタン UI を置いて、それをクリックすると Tweaks パネルが開く」という UI 改善要望あり。また `Ctrl+Shift+H` の挙動を「全 UI 非表示」ではなく「設定ボタンの表示/非表示トグル」に変更希望。Phase 1 では優先度低と判断して保留。
+**背景**: yosia さんから「キャラクターの左上に設定ボタン UI を置いて、それを Ctrl+Shift+H で表示/非表示できるようにしたい」という UI 改善要望あり。F1 は既存挙動のまま**残す** (両立)。Phase 1 では優先度低と判断して保留。
 
 **現状 (Phase 1)**:
 - 起動直後: キャラクターのみ (UI ゼロ)
 - F1 キー: Tweaks パネル オン/オフ
-- Ctrl+Shift+H: 全 UI 強制非表示 (配信時の OBS キャプチャ対策)
+- Ctrl+Shift+H: Tweaks パネルを含む**全 UI** を強制非表示
 
 **目標 (post_release)**:
-- キャラクター左上に設定ボタン (⚙ アイコン) を常駐表示
-- ボタンクリックで Tweaks パネルが開く (F1 の代替)
-- Ctrl+Shift+H: 設定ボタンのみ表示/非表示トグル (キャラは触らない、配信時は OBS でキャラだけ映る)
-- 既存の F1 / Ctrl+Shift+H は deprecate (互換性のため残す)
+- キャラクター左上に設定ボタン (⚙ アイコン) を**デフォルト常駐表示** (F1 不要)
+- 設定ボタンクリックで Tweaks パネルが開く
+- F1 キー: 引き続き Tweaks パネル オン/オフ (既存挙動を維持、**F1 とボタンは両立**)
+- Ctrl+Shift+H: **設定ボタンのみ** 表示/非表示トグル (Tweaks パネルは触らない)
+  - 表示に戻すのも同じ Ctrl+Shift+H
+  - 配信時に設定ボタンのみ隠せて、キャラは触らず、F1 でいつでも Tweaks 開ける
 
 **実装メモ**:
 
-- 設定ボタン位置: キャラクター左上の透明なクリック領域 (Ebitengine `image.DrawImage` + 透明背景)
+- 設定ボタン位置: キャラクター左上 (Ebitengine `image.DrawImage` + 透明背景 + 矩形 hit test)
 - ボタンの ebitenui 化 or 素朴な ebiten 描画: シンプル優先なら後者
-- クリック判定: `ebiten.CursorPosition()` + ボタン矩形 hit test (ebitenui 不要なら依存最小)
-- Ctrl+Shift+H ハンドラは Phase 1.13b で実装済み → 挙動変更のみ
+- クリック判定: `ebiten.CursorPosition()` + ボタン矩形 hit test
+- Ctrl+Shift+H の挙動変更: 現在は全 UI 強制非表示 → 設定ボタンのみにスコープ縮小
+- 既存の F1 は無改修、既存の Tweaks パネル無改修
+- uiHidden フラグの用途を変更: 「Tweaks パネル非表示」ではなく「設定ボタンのみ非表示」に
 
 **DoD**:
 
-- 起動直後から左上設定ボタンが表示される
-- ボタンクリックで Tweaks パネル表示
-- Ctrl+Shift+H で設定ボタンのみ表示/非表示
-- 既存 F1 / Ctrl+Shift+H も引き続き動作 (deprecation warning ログ程度)
+- 起動直後からキャラクター左上に設定ボタンが表示される
+- 設定ボタンをクリックで Tweaks パネル表示
+- F1 キーでも Tweaks パネル表示 (既存挙動維持、ボタンと F1 は**両立**)
+- Ctrl+Shift+H で**設定ボタンのみ** 表示/非表示トグル
+- もう一度 Ctrl+Shift+H で設定ボタン再表示
+- Tweaks パネル自体は Ctrl+Shift+H で消えない (F1 で制御)
 
 **工数**: 2-3 時間
 
