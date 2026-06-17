@@ -244,16 +244,22 @@ func (g *Game) Layout(w, h int) (int, int) {
 // WindowTitle は Ebitengine の SetWindowTitle に渡す定数。
 func WindowTitle() string { return windowTitle }
 
-// passthroughDesired は UI 表示状態から期待されるクリックスルー (passthrough) を返す。
+// passthroughDesired は X ボタンを常に有効化するため常に false を返す。
 // 純粋関数なのでユニットテストでカバー可能 (ebiten context 不要)。
 //
-// 真理値表:
-//   - panelVisible=true,  uiHidden=false → passthrough=false (UI クリック受付)
-//   - panelVisible=true,  uiHidden=true  → passthrough=true  (UI を全部隠す)
-//   - panelVisible=false, uiHidden=true  → passthrough=true  (UI を全部隠す)
-//   - panelVisible=false, uiHidden=false → passthrough=true  (UI は元々非表示)
+// Phase 1.14.10: passthrough 全面廃止。
+// Phase 1.14.9 firstUpdate fix 後も F1 パネル非表示時に X ボタンが通過する問題が
+// yosia さん実機 visual test で発覚。SetWindowMousePassthrough(true) は Windows の
+// WS_EX_TRANSPARENT 拡張スタイルを設定し、ウィンドウ全体 (タイトルバー含む) が
+// クリック透過になる。Ebitengine v2.9.9 純粋 API では per-region passthrough は
+// 不可能で、Win32 API (CGo) や FramelessWindow 自前タイトルバー描画は工数大。
+//
+// 最小修正として passthrough を全面廃止。犠牲: OBS クリック透過 (キャラ部分クリック
+// が背後のウィンドウに届かない)。ScreenTransparent: true は維持するため背景透過は
+// OK。Phase 2+ で Win32 API または自前タイトルバーで per-region passthrough を
+// 復活する時のアンカーとして applyPassthrough と firstUpdate 呼び出しは残す。
 func passthroughDesired(panelVisible, uiHidden bool) bool {
-	return !(panelVisible && !uiHidden)
+	return false
 }
 
 // applyPassthrough は UI 表示状態に応じてクリックスルーを切り替える。

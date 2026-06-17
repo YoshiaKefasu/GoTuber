@@ -20,7 +20,8 @@ func TestGame_ToggleUIHidden_TogglesValue(t *testing.T) {
 }
 
 // TestGame_PassthroughDesired は UI 表示状態から期待されるクリックスルー値を確認。
-// 真理値表は passthroughDesired 関数の godoc を参照。
+// Phase 1.14.10: passthrough は全面廃止され、X ボタンを常に有効化するため
+// passthroughDesired は常に false を返す (旧真理値表は無効)。
 func TestGame_PassthroughDesired(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -29,9 +30,9 @@ func TestGame_PassthroughDesired(t *testing.T) {
 		want         bool
 	}{
 		{"panel only (UI clickable)", true, false, false},
-		{"panel + hidden (UI all hidden)", true, true, true},
-		{"hidden only (no panel anyway)", false, true, true},
-		{"nothing (default startup)", false, false, true},
+		{"panel + hidden (UI all hidden)", true, true, false},
+		{"hidden only (no panel anyway)", false, true, false},
+		{"nothing (default startup)", false, false, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
