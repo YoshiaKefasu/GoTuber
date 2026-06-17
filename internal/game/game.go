@@ -18,9 +18,9 @@ import (
 )
 
 const (
-	windowTitle             = "GoTuber"
-	initialWindowWidth      = 1280
-	initialWindowHeight     = 720
+	windowTitle         = "GoTuber"
+	initialWindowWidth  = 1280
+	initialWindowHeight = 720
 )
 
 // DeviceListMessage は起動時バックグラウンドで列挙したデバイス一覧を
@@ -162,9 +162,16 @@ func (g *Game) Update() error {
 
 	// 口パク
 	if g.audio != nil && g.tweaks.AudioEnabled {
-		g.mouthState = g.audio.Update()
+		rms, envelope, mouth := g.audio.UpdateWithMetrics()
+		g.mouthState = mouth
+		g.tweaks.AudioRMS = rms
+		g.tweaks.AudioEnvelope = envelope
+		g.tweaks.AudioMouthState = mouth
 	} else {
 		g.mouthState = 0
+		g.tweaks.AudioRMS = 0
+		g.tweaks.AudioEnvelope = 0
+		g.tweaks.AudioMouthState = 0
 	}
 
 	// Tweaks panel UI 更新

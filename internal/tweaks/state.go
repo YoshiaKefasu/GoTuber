@@ -12,6 +12,12 @@ type State struct {
 	// Audio 口パクを有効化 (false なら mouth=0 固定)
 	AudioEnabled bool
 
+	// Audio debug values (Tweaks 表示用)。
+	// game.Update が audio.Mover.UpdateWithMetrics() の結果を毎フレーム書く。
+	AudioRMS        float64
+	AudioEnvelope   float64
+	AudioMouthState int
+
 	// UI 表示
 	PanelVisible bool // F1 で toggle
 

@@ -45,9 +45,20 @@ func (m *Mover) Stop() {
 // エンベロープで平滑化し、口パク状態 (0/1/2) を返す。
 // 毎フレーム (game.Update) から呼ぶ。
 func (m *Mover) Update() int {
-	rms := m.capture.GetRMS()
-	env := m.envelope.Update(rms)
-	return m.mouth.Update(env)
+	_, _, mouth := m.UpdateWithMetrics()
+	return mouth
+}
+
+// UpdateWithMetrics は口パク更新に使った RMS / envelope / mouth を返す。
+//
+// Phase 1.14.13: マイク入力が無音なのか、閾値に届かないのか、描画側で反映されて
+// いないのかを Tweaks パネルで切り分けるための診断値。口パク挙動自体は Update()
+// と同じ経路を通す。
+func (m *Mover) UpdateWithMetrics() (rms float64, envelope float64, mouth int) {
+	rms = m.capture.GetRMS()
+	envelope = m.envelope.Update(rms)
+	mouth = m.mouth.Update(envelope)
+	return rms, envelope, mouth
 }
 
 // Restart はキャプチャを新しいデバイス ID で再起動する。

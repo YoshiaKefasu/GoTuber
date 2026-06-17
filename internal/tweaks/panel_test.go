@@ -14,6 +14,15 @@ func TestState_Defaults(t *testing.T) {
 	if !s.AudioEnabled {
 		t.Errorf("expected AudioEnabled=true, got false")
 	}
+	if s.AudioRMS != 0 {
+		t.Errorf("expected AudioRMS=0, got %v", s.AudioRMS)
+	}
+	if s.AudioEnvelope != 0 {
+		t.Errorf("expected AudioEnvelope=0, got %v", s.AudioEnvelope)
+	}
+	if s.AudioMouthState != 0 {
+		t.Errorf("expected AudioMouthState=0, got %v", s.AudioMouthState)
+	}
 	if s.PanelVisible {
 		t.Errorf("expected PanelVisible=false, got true")
 	}
@@ -127,6 +136,35 @@ func TestSliderConstants(t *testing.T) {
 	}
 	if sliderMax != 100 {
 		t.Errorf("sliderMax (%d) should be 100 (representing 1.0)", sliderMax)
+	}
+}
+
+func TestAudioDebugLabel(t *testing.T) {
+	s := NewState()
+	s.AudioRMS = 0.12345
+	s.AudioEnvelope = 0.06789
+	s.AudioMouthState = 1
+	got := audioDebugLabel(s)
+	want := "Audio RMS: 0.1235 | Envelope: 0.0679 | Mouth: half"
+	if got != want {
+		t.Errorf("audioDebugLabel() = %q, want %q", got, want)
+	}
+}
+
+func TestMouthStateLabel(t *testing.T) {
+	tests := []struct {
+		state int
+		want  string
+	}{
+		{0, "closed"},
+		{1, "half"},
+		{2, "open"},
+		{99, "closed"},
+	}
+	for _, tt := range tests {
+		if got := mouthStateLabel(tt.state); got != tt.want {
+			t.Errorf("mouthStateLabel(%d) = %q, want %q", tt.state, got, tt.want)
+		}
 	}
 }
 

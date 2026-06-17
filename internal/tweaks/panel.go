@@ -1,6 +1,7 @@
 package tweaks
 
 import (
+	"fmt"
 	stdimage "image"
 	"image/color"
 
@@ -46,6 +47,7 @@ type Panel struct {
 	micContainer     *widget.Container // ComboBox + Refresh を入れる Row コンテナ
 	micCombo         *widget.ListComboButton
 	refreshBtn       *widget.Button
+	audioDebugText   *widget.Text
 	onDeviceSelected func(deviceID string)
 	onRefreshDevices func() []audio.Device
 }
@@ -180,6 +182,15 @@ func NewPanel(face *text.GoTextFace, state *State, audioEnabled bool) *Panel {
 		widget.TextOpts.Text("Mic Mouth Movement", facePtr, labelColorIdle),
 	))
 	root.AddChild(audioRow)
+
+	// --- Audio debug values ---
+	// Phase 1.14.13: 口パクしない問題の切り分け用。RMS=0 なら入力が来ていない、
+	// RMS は動くが Envelope/Mouth が動かないなら閾値側、Mouth が動くなら描画側を疑う。
+	audioDebugText := widget.NewText(
+		widget.TextOpts.Text(audioDebugLabel(state), facePtr, labelColorDim),
+	)
+	root.AddChild(audioDebugText)
+	p.audioDebugText = audioDebugText
 
 	// --- Phase 1.13a: Microphone Device (ComboBox) + Refresh ボタン ---
 	root.AddChild(widget.NewText(
@@ -398,7 +409,29 @@ func (p *Panel) SetDevices(devices []audio.Device) {
 
 // Update は毎フレーム呼ばれる。
 func (p *Panel) Update() {
+	if p.audioDebugText != nil {
+		p.audioDebugText.Label = audioDebugLabel(p.state)
+	}
 	p.ui.Update()
+}
+
+func audioDebugLabel(state *State) string {
+	return fmt.Sprintf("Audio RMS: %.4f | Envelope: %.4f | Mouth: %s",
+		state.AudioRMS,
+		state.AudioEnvelope,
+		mouthStateLabel(state.AudioMouthState),
+	)
+}
+
+func mouthStateLabel(mouthState int) string {
+	switch mouthState {
+	case audio.MouthHalf:
+		return "half"
+	case audio.MouthOpen:
+		return "open"
+	default:
+		return "closed"
+	}
 }
 
 // Draw は panel を screen に描画する。
