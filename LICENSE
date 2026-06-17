@@ -31,7 +31,12 @@ This project uses the following open-source libraries. See
 - malgo v0.11.25 — Unlicense (https://github.com/gen2brain/malgo)
 - ebitenui v0.7.3 — MIT (https://github.com/ebitenui/ebitenui)
 - golang.org/x/image v0.42.0 — BSD-3-Clause (https://pkg.go.dev/golang.org/x/image)
-- gocv v0.43.0 — Apache-2.0 (Phase 2+ only)
+- pelletier/go-toml v2 — MIT (https://github.com/pelletier/go-toml)
+- Phase 2+ (MediaPipe + Python サイドカー、Phase 1 では未使用):
+  - mediapipe 0.10.14+ — Apache-2.0 (https://developers.google.com/mediapipe)
+  - opencv-python 4.10.0+ — Apache-2.0 (mediapipe の transitive dependency)
+  - pebbe/zmq4 — MIT (https://github.com/pebbe/zmq4)
+  - pyzmq 26.0+ — BSD-3-Clause (https://github.com/zeromq/pyzmq)
 
 The Python tool `tools/slice_character_sheets.py` is MIT-licensed and
 inherited from [tomari-guruguru](https://github.com/rotejin/tomari-guruguru).

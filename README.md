@@ -25,13 +25,15 @@
 - **元 `src/character-config.js` 互換** — `basePath`, `eyesOpen`, `eyesClosed`, `close` の camelCase キー (Phase 1.12 で port)
 - **マイクデバイス選択** (Phase 1.13a 予定) — F1 → Settings → ドロップダウンで OS 全入力デバイスから選択、`os.UserConfigDir()/GoTuber/config.toml` に保存して再起動時に復元
 
-> **Phase 1 スコープ外**（Phase 1.5+ で再評価）: 音声ファイル口パク（mp3/wav/ogg）
+> **Phase 1 スコープ外**（post_release、詳細 → `docs/post_release.md` Section 1.5）: 音声ファイル口パク（mp3/wav/ogg）
 
-### Phase 2（カメラ VTuber・保留中）
-- **Webcam 顔追従** — 顔の動き（左右・上下・傾き）にキャラが追従
-- **口の自動検出** — カメラ映像の口の動きで口パク
-- **自動まばたき（カメラ）** — 目の瞬きでキャラがまたたき
-- **フェイルセーフ** — 顔が消えたら自動的にマイク/マウスモードに切替
+### Phase 2（カメラ VTuber・MediaPipe 即採用で確定）
+
+- **Webcam 頭の方向トラッキング** — 顔の動き（左右・上下）にキャラが追従（5×5 グリッド）
+- **自動まばたき（EAR）** — MediaPipe Face Landmarker の Eye Aspect Ratio で瞬き検出
+- **フェイルセーフ** — 顔が消えたら自動的にマウスモード（Phase 1.5）に切替
+- **Python サイドカー構成** — MediaPipe は Python プロセスで実行、GoTuber.exe は Go バイナリのみ（サイズ不変、起動失敗時は graceful degradation）
+- 口の縦横比 (MAR) カメラ検出は Phase 2.5+ で再評価（Phase 1.7 の malgo マイクと排他利用）
 
 ### Phase 3（VTuber ソフト連携・未着手）
 - **VMC Protocol 出力** — VTube Studio / VSeeFace / EVMC4U 等に UDP で送信
@@ -86,7 +88,7 @@
 - C コンパイラ（MSVC または gcc）— CGo (malgo) のため
   - Windows: `scoop install mingw` または MSVC Build Tools
   - WSL: `sudo apt install gcc libasound2-dev build-essential`
-- Phase 2 以降: OpenCV 4.13.0（gocv v0.43.0 要件）
+- Phase 2 以降: MediaPipe Face Landmarker (Python サイドカー) + ZeroMQ IPC (Go 側 `pebbe/zmq4`)
 - Python 3（スライス生成時のみ、純粋な標準ライブラリのみ使用、ffmpeg/ffprobe が必要）— `pip install -r tools/requirements.txt`
 
 ### ビルド
@@ -278,9 +280,9 @@ GoTuber/
 │   ├── requirements.txt     # Python 依存
 │   └── LICENSE-third-party  # 依存ライセンス一覧
 ├── docs/                    # 設計ドキュメント
-│   ├── PLAN.md              # 全体設計 (v0.4.4)
+│   ├── PLAN.md              # 全体設計 (v0.4.5)
 │   ├── PHASE1.md            # Phase 1 詳細設計
-│   ├── PHASE2.md            # Phase 2 詳細設計 (保留中)
+│   ├── PHASE2.md            # Phase 2 詳細設計 (MediaPipe 確定)
 │   ├── PHASE3.md            # Phase 3 詳細設計
 │   └── 新キャラ差し替え手順.md  # 元 MIT 翻訳、Phase 1.12 で port 内容に更新
 ├── scripts/                 # ビルドスクリプト
@@ -300,7 +302,7 @@ GoTuber/
 | **Phase 1.13b** | ✅ 完了 | UI 非表示ショートカット (`Ctrl+Shift+H` で Tweaks + 設定 UI を**全部トグル**表示/非表示。OBS ウィンドウキャプチャで UI が映り込まないようにする) |
 | **Phase 1.13a** | ✅ 完了 | マイク選択 + TOML 永続化 — malgo `Devices` 列挙 → ebitenui `ListComboButton` (ComboBox) ドロップダウン → 選択デバイスの malgo 内部 ID を `os.UserConfigDir()/GoTuber/config.toml` に保存 → 再起動時復元 (ID 照合で重複表示名も問題なし) |
 | **Phase 1.14** | ✅ 完了 | **終了ショートカット削除 + audio lifecycle fix** — `Esc` / `Q` キー検出と `killswitch.Install()` の Windows 限定削除 (Unix は `signal.Notify` 維持 = Ctrl+C graceful)。**真因判明**: Phase 1.13a visual test で F1 押下時に ListComboBox 初期選択 → `onDeviceSelected("")` → `Mover.Restart("")` → `NewCaptureByID()` の defer で成功 path も context 解放 → 次回 `Capture.Stop()` で double-free → 即終了。修正: `cleanupCtx` フラグで success/error 分離、`Mover.Restart` を失敗時旧 capture 温存化、main.go の guard で同一 device ID 選択 no-op。 |
-| Phase 2 | **保留中** | カメラ VTuber: 顔追従 + 口の自動検出（Q8 で再評価待ち） |
+| Phase 2 | **確定 (MediaPipe)** | カメラ VTuber: 頭の方向 + 瞬き (EAR)、Python サイドカー + ZeroMQ |
 | Phase 3 | 未着手 | VMC Protocol 出力 |
 
 設計判断とフェーズ詳細: [docs/PLAN.md](docs/PLAN.md) / [docs/PHASE1.md](docs/PHASE1.md) 参照。
@@ -351,13 +353,14 @@ Phase 1.10 時点で:
 
 ✅ **Phase 1 コア完了 (1.1〜1.12)** — コードレビュー対応済み、`go test ./...` 全パス (Windows バイナリ 19.5 MB / Linux バイナリ 25 MB)。キャラクターシステムは元 [tomari-guruguru](https://github.com/rotejin/tomari-guruguru) から 100% port (camelCase 設定、Y軸反転なし、1200×1200 anchored WebP、元 648 行スライスツール MIT 継承)。
 
-🔜 **次の予定**: Phase 1.14 (終了ショートカット削除 + kill switch 仕様整理)。
+🔜 **次の予定**: Phase 2 (MediaPipe Face Landmarker 即採用で確定、`docs/PHASE2.md` 参照)。
 
-- プラン: [docs/PLAN.md](docs/PLAN.md) v0.4.4
+- プラン: [docs/PLAN.md](docs/PLAN.md) v0.4.5
 - Phase 1.12 詳細: [docs/PHASE1.md](docs/PHASE1.md) Section 9
 - Phase 1.13 (1.13a/1.13b) 詳細: [docs/PHASE1.md](docs/PHASE1.md) Section 10
 - Phase 1.14 詳細: [docs/PHASE1.md](docs/PHASE1.md) Section 11
+- Phase 2 詳細: [docs/PHASE2.md](docs/PHASE2.md)
 - 設計判断: pure Go 書き直し採用（Wails / headless JS 比較の上、Section 0.5 参照）
 - ビルド方針: Windows 10/11（mingw-w64 クロスコンパイル）または WSL Ubuntu（gcc）
 - **視覚テストはユーザー側で実施予定**（実装完了 → 実行確認は手動）
-- Phase 1 スコープ: マウス追従 + メインマイク Realtime 口パク + 透過 + まばたき + Tweaks + CJK フォント（音声ファイル口パク・カメラは Phase 1.5+ / Phase 2+ で再評価）
+- Phase 1 スコープ: マウス追従 + メインマイク Realtime 口パク + 透過 + まばたき + Tweaks + CJK フォント + 設定永続化（音声ファイル口パクは post_release、Phase 2 で MediaPipe 即採用確定）
