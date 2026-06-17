@@ -20,6 +20,16 @@ const (
 	sliderMax = 100 // 1.0 * 100
 )
 
+// Mic sensitivity スライダーの値域 (int、表示用)。内部表現は float 1.0..20.0x
+// で保持し、スライダー値 = int / 10 で換算する (0.1 刻み、20.0x = 200)。
+//
+// Phase 1.14.15: 実機の無音ノイズでも口パクしないように感度を slider で調整可能化。
+// default 10.0x、range 1.0..20.0x (audio.Mover.SetSensitivity のクランプ範囲と一致)。
+const (
+	sensitivitySliderMin = 10  // 1.0x
+	sensitivitySliderMax = 200 // 20.0x
+)
+
 // clampInt は v を [lo, hi] にクランプする。
 func clampInt(v, lo, hi int) int {
 	if v < lo {
@@ -44,12 +54,14 @@ type Panel struct {
 
 	// Phase 1.13a: マイクデバイス選択 UI (ComboBox + Refresh ボタン) 用フィールド。
 	// コールバックは main.go から setter で設定する (tweaks パッケージは audio 操作を直接行わない)。
-	micContainer     *widget.Container // ComboBox + Refresh を入れる Row コンテナ
-	micCombo         *widget.ListComboButton
-	refreshBtn       *widget.Button
-	audioDebugText   *widget.Text
-	onDeviceSelected func(deviceID string)
-	onRefreshDevices func() []audio.Device
+	micContainer        *widget.Container // ComboBox + Refresh を入れる Row コンテナ
+	micCombo            *widget.ListComboButton
+	refreshBtn          *widget.Button
+	audioDebugText      *widget.Text // 1 行目: raw RMS / Floor / Gate (Phase 1.14.14)
+	audioDebugText2     *widget.Text // 2 行目: Gated / Envelope / Mouth (Phase 1.14.14)
+	micSensitivityLabel *widget.Text // "Mic Sensitivity: 10.0x" 動的ラベル (Phase 1.14.15)
+	onDeviceSelected    func(deviceID string)
+	onRefreshDevices    func() []audio.Device
 }
 
 // NewPanel は ebitenui を使った Tweaks パネルを構築する。
@@ -183,14 +195,56 @@ func NewPanel(face *text.GoTextFace, state *State, audioEnabled bool) *Panel {
 	))
 	root.AddChild(audioRow)
 
+	// --- Mic Sensitivity slider (Phase 1.14.15) ---
+	// 実機無音ノイズでも口パクする問題の調整用。1.0x..20.0x (UI 10..200, 内部 /10.0)。
+	// label は動的に "Mic Sensitivity: 10.0x" を表示し、Update() で state から再描画。
+	micSensitivityLabel := widget.NewText(
+		widget.TextOpts.Text(micSensitivityLabelText(state), facePtr, labelColorIdle),
+	)
+	root.AddChild(micSensitivityLabel)
+	p.micSensitivityLabel = micSensitivityLabel
+
+	initialSens := clampInt(int(state.AudioSensitivity*10.0), sensitivitySliderMin, sensitivitySliderMax)
+	sensitivitySlider := widget.NewSlider(
+		widget.SliderOpts.Orientation(widget.DirectionHorizontal),
+		widget.SliderOpts.MinMax(sensitivitySliderMin, sensitivitySliderMax),
+		widget.SliderOpts.InitialCurrent(initialSens),
+		widget.SliderOpts.WidgetOpts(widget.WidgetOpts.MinSize(200, 16)),
+		widget.SliderOpts.Images(
+			&widget.SliderTrackImage{
+				Idle:  image.NewNineSliceColor(color.NRGBA{0x33, 0x3a, 0x44, 0xff}),
+				Hover: image.NewNineSliceColor(color.NRGBA{0x33, 0x3a, 0x44, 0xff}),
+			},
+			&widget.ButtonImage{
+				Idle:    image.NewNineSliceColor(color.NRGBA{0x66, 0x8a, 0xbf, 0xff}),
+				Hover:   image.NewNineSliceColor(color.NRGBA{0x77, 0x9a, 0xcf, 0xff}),
+				Pressed: image.NewNineSliceColor(color.NRGBA{0x55, 0x7a, 0xaf, 0xff}),
+			},
+		),
+		widget.SliderOpts.FixedHandleSize(12),
+		widget.SliderOpts.ChangedHandler(func(args *widget.SliderChangedEventArgs) {
+			// int 10..200 → float 1.0..20.0x。0.1 刻み。
+			state.AudioSensitivity = float64(args.Current) / 10.0
+		}),
+	)
+	root.AddChild(sensitivitySlider)
+
 	// --- Audio debug values ---
 	// Phase 1.14.13: 口パクしない問題の切り分け用。RMS=0 なら入力が来ていない、
 	// RMS は動くが Envelope/Mouth が動かないなら閾値側、Mouth が動くなら描画側を疑う。
+	// Phase 1.14.14: 2 行に拡張 (1 行目: raw + floor + gate / 2 行目: gated + envelope + mouth)
+	// 固定閾値チューニングと adaptive noise gate の状態をユーザーが観察できるように。
 	audioDebugText := widget.NewText(
-		widget.TextOpts.Text(audioDebugLabel(state), facePtr, labelColorDim),
+		widget.TextOpts.Text(audioDebugLabel1(state), facePtr, labelColorDim),
 	)
 	root.AddChild(audioDebugText)
 	p.audioDebugText = audioDebugText
+
+	audioDebugText2 := widget.NewText(
+		widget.TextOpts.Text(audioDebugLabel2(state), facePtr, labelColorDim),
+	)
+	root.AddChild(audioDebugText2)
+	p.audioDebugText2 = audioDebugText2
 
 	// --- Phase 1.13a: Microphone Device (ComboBox) + Refresh ボタン ---
 	root.AddChild(widget.NewText(
@@ -410,14 +464,47 @@ func (p *Panel) SetDevices(devices []audio.Device) {
 // Update は毎フレーム呼ばれる。
 func (p *Panel) Update() {
 	if p.audioDebugText != nil {
-		p.audioDebugText.Label = audioDebugLabel(p.state)
+		p.audioDebugText.Label = audioDebugLabel1(p.state)
+	}
+	if p.audioDebugText2 != nil {
+		p.audioDebugText2.Label = audioDebugLabel2(p.state)
+	}
+	if p.micSensitivityLabel != nil {
+		// Phase 1.14.15: スライダー操作中の現在値を毎フレーム反映。
+		// スライダーの ChangedHandler は state.AudioSensitivity を更新するので、
+		// ここでは state から読んで Label に再代入する。
+		p.micSensitivityLabel.Label = micSensitivityLabelText(p.state)
 	}
 	p.ui.Update()
 }
 
-func audioDebugLabel(state *State) string {
-	return fmt.Sprintf("Audio RMS: %.4f | Envelope: %.4f | Mouth: %s",
+// audioDebugLabel1 は 1 行目: 入力側 (raw RMS / noise floor / gate 状態)。
+// 例: "Audio RMS: 0.0038 | Floor: 0.0012 | Gate: open"
+//
+// 読み方:
+//   - RMS=0 → マイク入力が来ていない (device 不正 or ミュート)
+//   - RMS>0, Floor も同程度, Gate closed → 環境ノイズのみ (正常)
+//   - RMS が Floor + 0.002 を超えれば Gate open になる
+//   - Gate open なのに Mouth が動かない → gain / envelope 閾値側を疑う
+func audioDebugLabel1(state *State) string {
+	return fmt.Sprintf("Audio RMS: %.4f | Floor: %.4f | Gate: %s",
 		state.AudioRMS,
+		state.AudioNoiseFloor,
+		gateStateLabel(state.AudioGateOpen),
+	)
+}
+
+// audioDebugLabel2 は 2 行目: 処理結果 (gated / envelope / mouth)。
+// 例: "Gated: 0.0420 | Envelope: 0.0310 | Mouth: closed"
+//
+// 読み方:
+//   - Gated=0 → Gate closed (gate で切られている、env/mouth も 0)
+//   - Gated>0, Envelope=0 → 直前で gate が閉じた (release 待ち)
+//   - Envelope>0, Mouth=closed → 0.07 未満 (MouthHalf 閾値以下)
+//   - Envelope>0.22, Mouth=open → 口全開
+func audioDebugLabel2(state *State) string {
+	return fmt.Sprintf("Gated: %.4f | Envelope: %.4f | Mouth: %s",
+		state.AudioGatedRMS,
 		state.AudioEnvelope,
 		mouthStateLabel(state.AudioMouthState),
 	)
@@ -432,6 +519,20 @@ func mouthStateLabel(mouthState int) string {
 	default:
 		return "closed"
 	}
+}
+
+func gateStateLabel(gateOpen bool) string {
+	if gateOpen {
+		return "open"
+	}
+	return "closed"
+}
+
+// micSensitivityLabelText は "Mic Sensitivity: 10.0x" 形式の動的ラベル文字列。
+// Phase 1.14.15: スライダー値を 0.1 刻みの 1 桁小数で表示。min 1.0x / max 20.0x。
+// state.AudioSensitivity は 0.1 刻みで 10..200 → 1.0..20.0x の値域。
+func micSensitivityLabelText(state *State) string {
+	return fmt.Sprintf("Mic Sensitivity: %.1fx", state.AudioSensitivity)
 }
 
 // Draw は panel を screen に描画する。

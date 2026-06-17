@@ -161,17 +161,30 @@ func (g *Game) Update() error {
 	}
 
 	// 口パク
+	// Phase 1.14.14: Mover.UpdateWithMetrics() の戻り値が Metrics 構造体に変更。
+	// RMS / NoiseFloor / GatedRMS / Envelope / Mouth / GateOpen の 6 フィールドを
+	// tweaks.State に展開し、Tweaks パネルの 2 行 debug 表示が毎フレーム更新される。
+	// Phase 1.14.15: Tweaks パネルの Mic Sensitivity slider の値を Mover に反映。
+	// 毎フレーム呼ぶことで slider 変更が即時反映される (無 lock — game.Update は
+	// 単一 goroutine からしか呼ばれない)。
 	if g.audio != nil && g.tweaks.AudioEnabled {
-		rms, envelope, mouth := g.audio.UpdateWithMetrics()
-		g.mouthState = mouth
-		g.tweaks.AudioRMS = rms
-		g.tweaks.AudioEnvelope = envelope
-		g.tweaks.AudioMouthState = mouth
+		g.audio.SetSensitivity(g.tweaks.AudioSensitivity)
+		metrics := g.audio.UpdateWithMetrics()
+		g.mouthState = metrics.Mouth
+		g.tweaks.AudioRMS = metrics.RMS
+		g.tweaks.AudioNoiseFloor = metrics.NoiseFloor
+		g.tweaks.AudioGatedRMS = metrics.GatedRMS
+		g.tweaks.AudioEnvelope = metrics.Envelope
+		g.tweaks.AudioMouthState = metrics.Mouth
+		g.tweaks.AudioGateOpen = metrics.GateOpen
 	} else {
 		g.mouthState = 0
 		g.tweaks.AudioRMS = 0
+		g.tweaks.AudioNoiseFloor = 0
+		g.tweaks.AudioGatedRMS = 0
 		g.tweaks.AudioEnvelope = 0
 		g.tweaks.AudioMouthState = 0
+		g.tweaks.AudioGateOpen = false
 	}
 
 	// Tweaks panel UI 更新

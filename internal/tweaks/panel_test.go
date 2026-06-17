@@ -14,6 +14,9 @@ func TestState_Defaults(t *testing.T) {
 	if !s.AudioEnabled {
 		t.Errorf("expected AudioEnabled=true, got false")
 	}
+	if s.AudioSensitivity != 10.0 {
+		t.Errorf("expected AudioSensitivity=10.0, got %v", s.AudioSensitivity)
+	}
 	if s.AudioRMS != 0 {
 		t.Errorf("expected AudioRMS=0, got %v", s.AudioRMS)
 	}
@@ -22,6 +25,16 @@ func TestState_Defaults(t *testing.T) {
 	}
 	if s.AudioMouthState != 0 {
 		t.Errorf("expected AudioMouthState=0, got %v", s.AudioMouthState)
+	}
+	// Phase 1.14.14: 追加された noise gate debug 値もゼロ値初期化される
+	if s.AudioNoiseFloor != 0 {
+		t.Errorf("expected AudioNoiseFloor=0, got %v", s.AudioNoiseFloor)
+	}
+	if s.AudioGatedRMS != 0 {
+		t.Errorf("expected AudioGatedRMS=0, got %v", s.AudioGatedRMS)
+	}
+	if s.AudioGateOpen {
+		t.Errorf("expected AudioGateOpen=false, got true")
 	}
 	if s.PanelVisible {
 		t.Errorf("expected PanelVisible=false, got true")
@@ -137,17 +150,71 @@ func TestSliderConstants(t *testing.T) {
 	if sliderMax != 100 {
 		t.Errorf("sliderMax (%d) should be 100 (representing 1.0)", sliderMax)
 	}
+	if sensitivitySliderMin != 10 {
+		t.Errorf("sensitivitySliderMin (%d) should be 10 (representing 1.0x)", sensitivitySliderMin)
+	}
+	if sensitivitySliderMax != 200 {
+		t.Errorf("sensitivitySliderMax (%d) should be 200 (representing 20.0x)", sensitivitySliderMax)
+	}
 }
 
-func TestAudioDebugLabel(t *testing.T) {
+func TestMicSensitivityLabelText(t *testing.T) {
+	s := NewState()
+	s.AudioSensitivity = 10.0
+	if got, want := micSensitivityLabelText(s), "Mic Sensitivity: 10.0x"; got != want {
+		t.Errorf("micSensitivityLabelText() = %q, want %q", got, want)
+	}
+	s.AudioSensitivity = 7.5
+	if got, want := micSensitivityLabelText(s), "Mic Sensitivity: 7.5x"; got != want {
+		t.Errorf("micSensitivityLabelText() = %q, want %q", got, want)
+	}
+}
+
+// TestAudioDebugLabel1 は 1 行目 (raw RMS / Floor / Gate) のフォーマット確認。
+// Phase 1.14.14: noise gate debug 値 (Floor / GateOpen) を表示するようになった。
+func TestAudioDebugLabel1(t *testing.T) {
 	s := NewState()
 	s.AudioRMS = 0.12345
-	s.AudioEnvelope = 0.06789
-	s.AudioMouthState = 1
-	got := audioDebugLabel(s)
-	want := "Audio RMS: 0.1235 | Envelope: 0.0679 | Mouth: half"
+	s.AudioNoiseFloor = 0.00231
+	s.AudioGateOpen = true
+	got := audioDebugLabel1(s)
+	want := "Audio RMS: 0.1235 | Floor: 0.0023 | Gate: open"
 	if got != want {
-		t.Errorf("audioDebugLabel() = %q, want %q", got, want)
+		t.Errorf("audioDebugLabel1() = %q, want %q", got, want)
+	}
+}
+
+// TestAudioDebugLabel2 は 2 行目 (Gated / Envelope / Mouth) のフォーマット確認。
+// Phase 1.14.14: 2 行表示に拡張。gate 通過 + gain 後の値を表示。
+func TestAudioDebugLabel2(t *testing.T) {
+	s := NewState()
+	s.AudioGatedRMS = 0.07890
+	s.AudioEnvelope = 0.04567
+	s.AudioMouthState = 1
+	got := audioDebugLabel2(s)
+	want := "Gated: 0.0789 | Envelope: 0.0457 | Mouth: half"
+	if got != want {
+		t.Errorf("audioDebugLabel2() = %q, want %q", got, want)
+	}
+}
+
+// TestAudioDebugLabels_GateClosed は gate closed 時の表示確認 (1 行目)。
+func TestAudioDebugLabels_GateClosed(t *testing.T) {
+	s := NewState()
+	s.AudioRMS = 0.0038
+	s.AudioNoiseFloor = 0.0037
+	s.AudioGateOpen = false
+	got1 := audioDebugLabel1(s)
+	if want := "Audio RMS: 0.0038 | Floor: 0.0037 | Gate: closed"; got1 != want {
+		t.Errorf("audioDebugLabel1() = %q, want %q", got1, want)
+	}
+	// gate closed → Gated=0 になるはず (ゲーム側ロジックで決まる)
+	s.AudioGatedRMS = 0
+	s.AudioEnvelope = 0
+	s.AudioMouthState = 0
+	got2 := audioDebugLabel2(s)
+	if want := "Gated: 0.0000 | Envelope: 0.0000 | Mouth: closed"; got2 != want {
+		t.Errorf("audioDebugLabel2() = %q, want %q", got2, want)
 	}
 }
 
@@ -164,6 +231,22 @@ func TestMouthStateLabel(t *testing.T) {
 	for _, tt := range tests {
 		if got := mouthStateLabel(tt.state); got != tt.want {
 			t.Errorf("mouthStateLabel(%d) = %q, want %q", tt.state, got, tt.want)
+		}
+	}
+}
+
+// TestGateStateLabel は gate 状態ラベルの境界確認 (Phase 1.14.14)。
+func TestGateStateLabel(t *testing.T) {
+	tests := []struct {
+		gateOpen bool
+		want     string
+	}{
+		{true, "open"},
+		{false, "closed"},
+	}
+	for _, tt := range tests {
+		if got := gateStateLabel(tt.gateOpen); got != tt.want {
+			t.Errorf("gateStateLabel(%v) = %q, want %q", tt.gateOpen, got, tt.want)
 		}
 	}
 }
