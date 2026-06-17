@@ -238,7 +238,7 @@ func NewPanel(face *text.GoTextFace, state *State, audioEnabled bool) *Panel {
 
 	// --- ヒント ---
 	root.AddChild(widget.NewText(
-		widget.TextOpts.Text("F1: Toggle Panel  |  Esc / Q / Ctrl+C: Quit  |  Ctrl+Shift+H: Hide All UI", facePtr, labelColorDim),
+		widget.TextOpts.Text("F1: Toggle Panel  |  Ctrl+Shift+H: Hide All UI", facePtr, labelColorDim),
 	))
 
 	// --- Quit ボタン ---
@@ -251,8 +251,9 @@ func NewPanel(face *text.GoTextFace, state *State, audioEnabled bool) *Panel {
 		widget.ButtonOpts.Text("Quit", facePtr, btnTextColor),
 		widget.ButtonOpts.TextPadding(&widget.Insets{Left: 20, Right: 20, Top: 5, Bottom: 5}),
 		widget.ButtonOpts.ClickedHandler(func(args *widget.ButtonClickedEventArgs) {
-			// ボタンクリックで終了。ebiten.Termination を返す手段がないため、
-			// killswitch を直接トリガーする。
+			// ボタンクリックで終了。Game.Update() で QuitRequested チェック →
+			// ebiten.Termination 返却 (Phase 1.14 後の唯一の GUI 終了手段。
+			// Esc / signal.Notify on Windows は削除済み)
 			state.QuitRequested = true
 		}),
 	)
@@ -339,10 +340,14 @@ func (p *Panel) SetOnRefreshDevices(fn func() []audio.Device) {
 }
 
 // SetDevices は ComboBox のエントリを新しいデバイス一覧で置き換える。
-// 呼び出しスレッド: ebitenui メインスレッドから (Refresh ボタン or 起動時バックグラウンド
-// からの呼び出しは不可、ebitenui は goroutine safe ではない)。
+// 呼び出しスレッド: ebitenui メインスレッドから (Refresh ボタン or Game.Update 内
+// dispatch)。ebitenui は goroutine safe ではないため、バックグラウンド goroutine
+// から直接呼ぶのは禁止。
 //
-// Phase 1.13a 起動時: main.go の `go func() { ... panel.SetDevices(devices) }()` 経由。
+// Phase 1.13a 起動時: main.go の goroutine → devicesCh → Game.Update() 経由で
+//
+//	ebitenui メインスレッドから呼ばれる (S-1: channel dispatch)。
+//
 // Phase 1.13a Refresh: Refresh ボタンの ClickedHandler 内 (ebitenui メインスレッド)。
 //
 // devices に空配列を渡すと ComboBox は "(OS default)" のみになる。

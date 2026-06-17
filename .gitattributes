@@ -1,0 +1,31 @@
+# GoTuber line ending policy
+# ソース / docs は LF で統一。Windows ビルド (mingw-w64 / MSVC) でも
+# ビルド自体は LF ソースをそのまま扱える。CRLF 混入は git diff ノイズになる。
+
+# Go source
+*.go text eol=lf
+
+# Documentation
+*.md text eol=lf
+
+# Build scripts (PowerShell は CRLF が慣例だが、リポジトリでは LF に統一)
+*.ps1 text eol=lf
+*.sh text eol=lf
+
+# Config / metadata
+*.yaml text eol=lf
+*.yml text eol=lf
+*.toml text eol=lf
+
+# Binary assets
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.ttf binary
+*.otf binary
+*.exe binary
+*.dll binary
+*.dylib binary
+*.so binary

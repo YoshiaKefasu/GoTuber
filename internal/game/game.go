@@ -161,8 +161,9 @@ func (g *Game) Update() error {
 		g.panel.Update()
 	}
 
-	// kill switch
-	killswitch.Tick()
+	// SIGINT/SIGTERM 終了検出 (Unix only、Phase 1.14 で Esc 検出削除)
+	// Windows では Install() が no-op のため Triggered() は常に false。
+	// 終了はウィンドウ X ボタン (GLFW close callback) または Tweaks Quit ボタン。
 	if killswitch.Triggered() {
 		return ebiten.Termination
 	}

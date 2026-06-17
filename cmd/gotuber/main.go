@@ -151,25 +151,52 @@ func main() {
 		return "greyed (mic unavailable)"
 	}())
 
-	// Phase 1.13a: Panel にデバイス選択コールバックを設定。
+	// Phase 1.14.7: Panel にデバイス選択コールバックを設定。
 	// tweaks パッケージは audio 操作を直接行わず、main.go がオーケストレータになる。
+	//
+	// ComboBox 初期表示で onDeviceSelected("") が飛んでも no-op にするための guard。
+	// F1 押下直後の `config saved: audio.device_id = ""` 抑止が主目的。
+	// 同じ device ID 選択 (ユーザーが既に選択中のデバイスを再選択) も no-op。
+	//
+	// 順序設計 (Phase 1.14.6 の Mover.Restart 仕様と連携):
+	//   1. 同一 device ID なら早期 return (save も restart も走らない)
+	//   2. mover がある場合: Restart を先に試す
+	//      - Restart 失敗 → 旧 capture 維持 (Phase 1.14.6 で保証) → config 更新しない
+	//        → 旧: save 成功 → restart 失敗時に「config は新 deviceID、runtime は旧 device」
+	//          の不整合 (stale) 状態を作っていた
+	//        → 新: restart が真に新 device で動いたことを確認してから config を更新するので
+	//          config と runtime が常に一致する
+	//   3. mover がない場合 (起動時 audio 初期化失敗): restart できないので
+	//      config だけ保存 (次回の起動で新 deviceID が反映される)
 	panel.SetOnDeviceSelected(func(deviceID string) {
-		// P-4: 選択イベントで即座に config.Save を呼ぶ (永続化)
-		userCfg.Audio.DeviceID = deviceID
-		if err := userCfg.Save(); err != nil {
-			log.Printf("config save failed: %v", err)
-		} else {
-			log.Printf("config saved: audio.device_id = %q", deviceID)
-		}
-		// Mover 再起動 (失敗時は古い mover を維持できないので nil にして UI のみ続行)
-		if mover == nil {
-			log.Printf("audio: cannot restart (no initial mover)")
+		// 1. 同一 device guard (F1 初期表示の "" 含む、ユーザーの再選択も no-op)
+		//    ログは出さない: F1 押下のたびに 1 行出るのはノイズ。
+		//    ComboBox 初期表示で必ず発火するため、起動毎に出るとログが埋まる。
+		currentDeviceID := userCfg.Audio.DeviceID
+		if deviceID == currentDeviceID {
 			return
 		}
+		// 2. mover なし: restart 不可なので config だけ保存 (次回の起動で反映)
+		if mover == nil {
+			userCfg.Audio.DeviceID = deviceID
+			if err := userCfg.Save(); err != nil {
+				log.Printf("config save failed: %v", err)
+			} else {
+				log.Printf("config saved: audio.device_id = %q (audio mover unavailable, will apply on next launch)", deviceID)
+			}
+			return
+		}
+		// 3. Restart を先に試す (Phase 1.14.6: 失敗時は旧 capture 維持 → config 更新しない)
 		if err := mover.Restart(deviceID); err != nil {
-			log.Printf("audio restart failed (continuing with stale state): %v", err)
+			log.Printf("audio restart failed (continuing with previous device): %v", err)
+			return
+		}
+		// 4. Restart 成功 → config を更新 (runtime と config を一致させる)
+		userCfg.Audio.DeviceID = deviceID
+		if err := userCfg.Save(); err != nil {
+			log.Printf("config save failed (audio is running on new device but config file is stale): %v", err)
 		} else {
-			log.Printf("audio restarted with device_id = %q", deviceID)
+			log.Printf("config saved: audio.device_id = %q", deviceID)
 		}
 	})
 	panel.SetOnRefreshDevices(func() []audio.Device {

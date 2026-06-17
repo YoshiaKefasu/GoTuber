@@ -19,8 +19,10 @@ func TestTriggeredInitiallyFalse(t *testing.T) {
 func TestSignalTriggersKillSwitch(t *testing.T) {
 	// Process.Signal(os.Interrupt) は Windows で未サポート。
 	// 将来 Windows テスト対応時は console API 経由で送信する。
+	// Windows では Install() 自体が no-op になるため、Triggered() が
+	// 立つ経路がない。よってこのテストは Windows では Skip する。
 	if runtime.GOOS == "windows" {
-		t.Skip("os.Interrupt via Process.Signal is not supported on Windows")
+		t.Skip("os.Interrupt via Process.Signal is not supported on Windows; Install() is a no-op on Windows")
 	}
 	Reset()
 
@@ -53,14 +55,4 @@ func TestSignalTriggersKillSwitch(t *testing.T) {
 	}
 
 	t.Error("expected Triggered() to become true within 2s after SIGINT")
-}
-
-func TestEscTriggersKillSwitch(t *testing.T) {
-	// Esc 検出は Ebitengine inpututil に依存するため統合テスト扱い。
-	// ここでは状態遷移のみを検証（escPressed が立ったら Triggered() が true）。
-	Reset()
-	escPressed.Store(true)
-	if !Triggered() {
-		t.Error("expected Triggered() to be true when escPressed is set")
-	}
 }

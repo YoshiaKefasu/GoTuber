@@ -51,15 +51,46 @@ func NewCapture() (*Capture, error) {
 // 個別に ctx.Free() を呼んでいたが、ctx.Uninit() をスキップしており
 // malgo godoc の "Free must only be called for an uninitialized context." に違反していた。
 // defer に統一することで全ての return path で正しい順序が保証される。
+//
+// Phase 1.14.1 (audio lifecycle fix): defer の Uninit/Free は **失敗 path のみ** 実行
+// するように変更。成功 path では ctx をそのまま Capture に持たせ、解放責任を
+// Capture.Stop() に委ねる。
+//
+// 旧コードの致命的バグ:
+//   - 成功時に defer で ctx が Uninit/Free 済みでも c.ctx はそのまま指し続ける
+//   - その後 Capture.Stop() が再度 c.ctx.Uninit() / c.ctx.Free() を呼ぶ
+//   - → 既に Free 済み ctx への double-free でヒープ破壊 / プロセス終了
+//
+// 実機で観測された症状:
+//   F1 押下 → Tweaks パネル → ListComboButton 初期選択イベント
+//   → onDeviceSelected("") → Mover.Restart("") → m.capture.Stop() (旧 capture)
+//   → 上記 double-free で即座にクラッシュ。
+//   ログ `config saved: audio.device_id = ""` の直後で app 終了。
+//
+// 修正方針:
+//   - cleanupCtx フラグで success/error を分岐
+//   - success path: cleanupCtx = false にして defer の cleanup を skip
+//   - error path: cleanupCtx = true のまま、defer で Uninit → Free
+//   - InitDevice 成功後は Capture.Stop() が device と context 両方を解放
 func NewCaptureByID(deviceID string) (*Capture, error) {
 	ctx, err := newContext()
 	if err != nil {
 		return nil, fmt.Errorf("malgo init: %w", err)
 	}
-	// defer は LIFO で実行される: Uninit (内部状態解放) → Free (構造体解放) の順。
-	// 関数 return 時に必ず両方が呼ばれる。
-	defer ctx.Free()
-	defer ctx.Uninit()
+	// ctx 解放責任の分岐フラグ。
+	// true  = 失敗 path → defer で ctx を解放
+	// false = 成功 path → defer を no-op にして Capture に所有権を移譲
+	cleanupCtx := true
+	defer func() {
+		if cleanupCtx {
+			// 失敗 path: LIFO 順 (Uninit → Free) を維持。
+			// malgo godoc: "Free must only be called for an uninitialized context."
+			// Uninit() は error を返す可能性があるが、defer 経路なので破棄 (cleanup 失敗で
+			// プロセスを落とすと元も子もない。リークは許容)。
+			_ = ctx.Uninit()
+			ctx.Free()
+		}
+	}()
 
 	deviceConfig := malgo.DefaultDeviceConfig(malgo.Capture)
 	deviceConfig.Capture.Format = format
@@ -102,6 +133,12 @@ func NewCaptureByID(deviceID string) (*Capture, error) {
 		return nil, fmt.Errorf("malgo init device: %w", err)
 	}
 	c.device = device
+
+	// 成功 path: ctx 解放責任を Capture に移譲。
+	// defer は cleanupCtx==false なので何もしない。Capture.Stop() が
+	// device.Uninit → ctx.Uninit → ctx.Free の順で解放する。
+	// (※ 現状 InitDevice 後に error path はないため device cleanup は不要)
+	cleanupCtx = false
 	return c, nil
 }
 

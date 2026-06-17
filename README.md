@@ -21,7 +21,7 @@
 - **クリックスルー** — キャラの背後をクリックできる（配下アプリの操作を邪魔しない）
 - **Tweaks パネル** — 追従速度・自動まばたき ON/OFF・口パク ON/OFF を `F1` キーまたは Quit ボタンで操作
 - **CJK フォント埋め込み** — Gen Interface JP Regular (Inter + Noto Sans JP) をバイナリ同梱
-- **終了** — **ウィンドウの閉じる X ボタン** (全 OS graceful) または **Ctrl+C** (Unix: graceful / Windows: 即終了)。`Esc` / `Q` キーでの終了は削除予定 (Phase 1.14)
+- **終了** — **ウィンドウの閉じる X ボタン** (全 OS graceful) または **Ctrl+C** (Unix: graceful / Windows: 即終了)。`Esc` / `Q` キーの kill switch は削除済み (Phase 1.14)
 - **元 `src/character-config.js` 互換** — `basePath`, `eyesOpen`, `eyesClosed`, `close` の camelCase キー (Phase 1.12 で port)
 - **マイクデバイス選択** (Phase 1.13a 予定) — F1 → Settings → ドロップダウンで OS 全入力デバイスから選択、`os.UserConfigDir()/GoTuber/config.toml` に保存して再起動時に復元
 
@@ -236,7 +236,7 @@ python tools/slice_character_sheets.py --help
 | `Ctrl+C` | 終了（コンソールから）| Unix: graceful (`signal.Notify` 経由) / Windows: Go runtime デフォルト即終了 |
 | **ウィンドウの X ボタン** | 終了 (推奨) |
 
-> **Phase 1.14 で削除予定**: `Esc` / `Q` キーの kill switch は F1 / Esc 押下で即終了バグの原因。真因は不明 (Ebitengine v2.9.9 に SIGINT handler なし、競合説は否定済み)。
+> **Phase 1.14 で削除済み**: `Esc` / `Q` キーの kill switch を完全削除。代わりに **F1 で Tweaks パネル → Quit ボタン** が GUI 唯一の終了手段 (Phase 1.14.4)。X ボタン・Ctrl+C も引き続き有効。F1/Esc 即終了バグは audio lifecycle の double-free が真因 (Phase 1.14.1) と判明。
 
 マウス操作: キャラに向かって顔を向ける（5×5 グリッド追従）。
 
@@ -299,7 +299,7 @@ GoTuber/
 | **Phase 1.1 〜 1.12** | ✅ **完了** | MVP: 透過 + クリックスルー + アトラス + マウス追従 (Y軸反転なし) + まばたき + メインマイク口パク + Tweaks + CJK フォント + ビルドスクリプト + slice ツール (Phase 1.12 で元 648 行版 MIT 継承) |
 | **Phase 1.13b** | ✅ 完了 | UI 非表示ショートカット (`Ctrl+Shift+H` で Tweaks + 設定 UI を**全部トグル**表示/非表示。OBS ウィンドウキャプチャで UI が映り込まないようにする) |
 | **Phase 1.13a** | ✅ 完了 | マイク選択 + TOML 永続化 — malgo `Devices` 列挙 → ebitenui `ListComboButton` (ComboBox) ドロップダウン → 選択デバイスの malgo 内部 ID を `os.UserConfigDir()/GoTuber/config.toml` に保存 → 再起動時復元 (ID 照合で重複表示名も問題なし) |
-| **Phase 1.14** | 🔜 予定 | **終了ショートカット削除** — `Esc` / `Q` キー検出と `killswitch.Install()` の Windows 限定削除。**Unix は `signal.Notify` 維持** (Ctrl+C graceful)、**Windows は削除** (Ctrl+C 即終了、推奨 X ボタン)。原因: Phase 1.13 visual test で F1 / Esc 押下時に即終了バグ発覚。**真因不明** (Ebitengine v2.9.9 に SIGINT handler なし) |
+| **Phase 1.14** | ✅ 完了 | **終了ショートカット削除 + audio lifecycle fix** — `Esc` / `Q` キー検出と `killswitch.Install()` の Windows 限定削除 (Unix は `signal.Notify` 維持 = Ctrl+C graceful)。**真因判明**: Phase 1.13a visual test で F1 押下時に ListComboBox 初期選択 → `onDeviceSelected("")` → `Mover.Restart("")` → `NewCaptureByID()` の defer で成功 path も context 解放 → 次回 `Capture.Stop()` で double-free → 即終了。修正: `cleanupCtx` フラグで success/error 分離、`Mover.Restart` を失敗時旧 capture 温存化、main.go の guard で同一 device ID 選択 no-op。 |
 | Phase 2 | **保留中** | カメラ VTuber: 顔追従 + 口の自動検出（Q8 で再評価待ち） |
 | Phase 3 | 未着手 | VMC Protocol 出力 |
 
@@ -312,7 +312,7 @@ GoTuber/
 | `F1` | Tweaks パネル表示/非表示 | 1.8 |
 | `Ctrl+Shift+H` | 全ての UI (Tweaks + 設定) を**一括トグル**表示/非表示。**配信時に使用** (OBS ウィンドウキャプチャで UI が映らない) | 1.13b (予定) |
 | **ウィンドウ X ボタン** | 終了 (推奨) | 1.1 |
-| ~~`Esc` / `Q`~~ | ~~終了 (kill switch)~~ | **削除予定 (Phase 1.14)**: F1 / Esc 押下で即終了バグの原因。真因不明 |
+| ~~`Esc` / `Q`~~ | ~~終了 (kill switch)~~ | **削除済み (Phase 1.14)**: F1/Esc 即終了バグの真因は audio lifecycle の double-free。代替: Tweaks Quit ボタン or ウィンドウ X ボタン |
 | `Ctrl+C` | 終了 (コンソールから) | Unix: graceful (`signal.Notify` 経由) / Windows: Go runtime デフォルト即終了 |
 
 ## テスト
