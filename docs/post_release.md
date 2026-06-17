@@ -100,6 +100,37 @@ python tools/build_default_character.py <入力フォルダ> \
 
 **工数**: 4-6 時間
 
+### 1.6. UI 改善: 左上設定ボタン + Ctrl+Shift+H で UI 表示/非表示 (ユーザー要望 2026-06-17)
+
+**背景**: yosia さんから「キャラクターの左上に設定ボタン UI を置いて、それをクリックすると Tweaks パネルが開く」という UI 改善要望あり。また `Ctrl+Shift+H` の挙動を「全 UI 非表示」ではなく「設定ボタンの表示/非表示トグル」に変更希望。Phase 1 では優先度低と判断して保留。
+
+**現状 (Phase 1)**:
+- 起動直後: キャラクターのみ (UI ゼロ)
+- F1 キー: Tweaks パネル オン/オフ
+- Ctrl+Shift+H: 全 UI 強制非表示 (配信時の OBS キャプチャ対策)
+
+**目標 (post_release)**:
+- キャラクター左上に設定ボタン (⚙ アイコン) を常駐表示
+- ボタンクリックで Tweaks パネルが開く (F1 の代替)
+- Ctrl+Shift+H: 設定ボタンのみ表示/非表示トグル (キャラは触らない、配信時は OBS でキャラだけ映る)
+- 既存の F1 / Ctrl+Shift+H は deprecate (互換性のため残す)
+
+**実装メモ**:
+
+- 設定ボタン位置: キャラクター左上の透明なクリック領域 (Ebitengine `image.DrawImage` + 透明背景)
+- ボタンの ebitenui 化 or 素朴な ebiten 描画: シンプル優先なら後者
+- クリック判定: `ebiten.CursorPosition()` + ボタン矩形 hit test (ebitenui 不要なら依存最小)
+- Ctrl+Shift+H ハンドラは Phase 1.13b で実装済み → 挙動変更のみ
+
+**DoD**:
+
+- 起動直後から左上設定ボタンが表示される
+- ボタンクリックで Tweaks パネル表示
+- Ctrl+Shift+H で設定ボタンのみ表示/非表示
+- 既存 F1 / Ctrl+Shift+H も引き続き動作 (deprecation warning ログ程度)
+
+**工数**: 2-3 時間
+
 ---
 
 ## 🟡 中優先度
