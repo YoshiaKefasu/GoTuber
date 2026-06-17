@@ -297,6 +297,10 @@ func (p *Panel) newDeviceCombo(entries []any) *widget.ListComboButton {
 		widget.ListComboButtonOpts.ListParams(&widget.ListParams{
 			ScrollContainerImage: &widget.ScrollContainerImage{
 				Idle: image.NewNineSliceColor(color.NRGBA{0x33, 0x3a, 0x44, 0xff}),
+				// Phase 1.14.11 fix: Mask 未設定だと ebitenui v0.7.3 の
+				// ScrollContainer.Validate() で panic する (Refresh ボタン押下時の
+				// ComboBox 再生成で発火)。Idle と同じ色でクリッピング形状を定義。
+				Mask: image.NewNineSliceColor(color.NRGBA{0x33, 0x3a, 0x44, 0xff}),
 			},
 			EntryFace: &faceIface,
 			EntryColor: &widget.ListEntryColor{
