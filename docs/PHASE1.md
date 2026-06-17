@@ -415,7 +415,7 @@ if ctrl && shft && hKey {
 
 - `g.uiHidden == true` → `Game.Draw()` で `g.panel.Draw(screen)` を呼ばない (Tweaks 表示停止)
 - Tweaks 自体が `uiHidden` を見て Settings ボタンも表示しない (F1 押しても何も出ない)
-- **kill switch (Esc) は uiHidden に関わらず常に有効** (閉じれなくなる事故防止)
+- **終了は OS ウィンドウ閉じる X ボタンで行う** (Phase 1.14 で詳細仕様確定、参照)
 
 #### 10.3.4 サブフェーズ分割
 
@@ -424,16 +424,16 @@ if ctrl && shft && hKey {
 | 1.13b.1 | `Game.uiHidden bool` フィールド + Ctrl+Shift+H 検出 (`IsKeyPressed`(Ctrl+Shift 2 キー) + `IsKeyJustPressed`(H)) | 0.2 日 |
 | 1.13b.2 | `Game.Draw()` で `uiHidden` 時に panel.Draw() スキップ | 0.1 日 |
 | 1.13b.3 | Tweaks panel 内部で Settings ボタンも uiHidden 反映 | 0.2 日 |
-| 1.13b.4 | kill switch が uiHidden に関わらず動作することの確認 | 0.1 日 |
+| 1.13b.4 | (削除: kill switch 確認は Phase 1.14 に移動) | - |
 | 1.13b.5 | ユニットテスト (uiHidden トグル動作) | 0.2 日 |
 | 1.13b.6 | code-reviewer + visual test | 0.2 日 |
-| **合計** | | **1 日** |
+| **合計** | | **0.9 日** |
 
 #### 10.3.5 完了基準 (DoD)
 
 - [ ] Ctrl+Shift+H 押下で F1 パネル + 設定 UI が即座に消える
 - [ ] もう一度 Ctrl+Shift+H でもとに戻る
-- [ ] UI 非表示中も Esc (kill switch) は機能する
+- [ ] ~~UI 非表示中も Esc (kill switch) は機能する~~ → **Phase 1.14 で削除予定 (X ボタン終了に統一)**
 - [ ] `go test ./internal/game/` 全テスト pass
 - [ ] code-reviewer APPROVE
 - [ ] yosia さん visual test (OBS ウィンドウキャプチャで UI が映らないこと確認)
@@ -463,3 +463,97 @@ if ctrl && shft && hKey {
 - `docs/新キャラ差し替え手順.md`: 影響なし (キャラクターアセットのみ)
 - `README.md` 機能リスト: 「マイクデバイス選択」を Phase 1.13a に追記
 - `README.md` キーボードショートカット表: 「Ctrl+Shift+H (UI 全非表示)」を Phase 1.13b に追記
+
+## 11. Phase 1.14: 終了ショートカット削除 (X ボタン + signal.Notify (Unix only) に統一)
+
+### 11.1 背景
+
+Phase 1.13 visual test (2026-06-17) で **致命的なバグ** 発覚:
+
+- **F1 を押すとアプリが即終了する**
+- **Esc を押してもアプリが即終了する**
+- **ターミナルウィンドウがフラッシングして消える** (Windows Explorer ダブルクリック起動時)
+
+原因分析 (2026-06-17 code-reviewer 検証):
+
+- `killswitch.Install()` で `signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)` を呼んで OS シグナルリッスン
+- **当初の仮説**: 「Ebitengine の SIGINT ハンドラと競合」
+- **検証結果**: Ebitengine v2.9.9 ソースコード直接確認 → **`signal.Notify` 呼び出しは Ebitengine 内に一切存在しない** (run.go, internal/ui/ui.go, internal/ui/run.go, internal/ui/ui_glfw.go, internal/ui/ui_windows.go, hideconsole 全確認)
+- **F1 が `triggered=true` を立てるコードパスは `game.go` / `signal.go` に存在しない** (F1 は PanelVisible トグルのみ、Tick は Esc のみチェック)
+- **真因は不明**。候補: ebitenui フォーカス処理、GLFW key event ハンドリング、視覚テスト時の別キー同時押し、別経路の `triggered=true` 設定
+
+yosia さんの運用判断: **「ウィンドウの閉じる X ボタンで閉じれるから、終了ショートカットはいらない」**。
+
+> **Phase 1.14 の前提条件**: F1 バグの真因調査を **実装着手前** に実施する。真因不明のまま実装すると再発リスク。
+
+### 11.2 目標
+
+- **終了ショートカット (Esc / Q) を削除**。`killswitch.Install()` は **Windows 限定で削除** (`runtime.GOOS == "windows"` ガード)。
+- **Unix では `signal.Notify` を維持** — Ctrl+C → `triggered=true` → `ebiten.Termination` → 正常終了コード 0 (graceful)
+- **Windows では `signal.Notify` を削除** — Ctrl+C は Go runtime デフォルト挙動 (`os.Exit(2)` 即終了、graceful ではない)。GUI モード (hideconsole で FreeConsole 後) は SIGINT が届かない
+- **Ctrl+C の挙動**:
+  - **Unix**: `signal.Notify` 経由で graceful 終了 (従来通り)
+  - **Windows**: Go runtime デフォルトで即終了 (graceful ではない)。推奨終了方法は **X ボタン** (GLFW close callback → `RegularTermination` → graceful)
+- **ウィンドウの閉じる X ボタン** を推奨終了方法 (全 OS で graceful)
+- `internal/killswitch/` パッケージは **将来用に維持** するが、Windows では `Install()` が no-op になる
+
+### 11.3 変更ファイル
+
+| ファイル | 変更内容 |
+|---|---|
+| `internal/killswitch/signal.go` | `Install()` に `runtime.GOOS == "windows"` ガード追加 (Windows では no-op)。`Tick()` から `Esc` 検出削除。`escPressed` field を完全削除。`Triggered()` は `triggered.Load()` のみ |
+| `internal/game/game.go` | `killswitch.Tick()` 呼び出し削除 (毎フレーム呼ぶ必要なくなる) |
+| `internal/tweaks/panel.go:241` | hint テキスト `F1: Toggle Panel  \|  Esc / Q / Ctrl+C: Quit  \|  Ctrl+Shift+H: Hide All UI` → `F1: Toggle Panel  \|  Ctrl+Shift+H: Hide All UI` |
+| `internal/tweaks/panel.go:253-257` | Quit ボタンコメント修正: 「killswitch を直接トリガーする」→「Game.Update() で QuitRequested チェック → ebiten.Termination 返却 (Phase 1.14 後の唯一の GUI 終了手段)」|
+| `internal/killswitch/signal_test.go` | `TestKillSwitch_EscPressed` 削除 (Esc 検出なくなったため)、`TestKillSwitch_Triggered` 維持 |
+| `docs/PHASE1.md` Section 10.3 系 | kill switch 言及を **strikethrough + Phase 1.14 参照** (本セクションで更新済み) |
+| `docs/PLAN.md` Section 7 (kill switch 章) | kill switch 仕様削除、X ボタン + signal.Notify (Unix only) に統一 |
+| `docs/README.md` ショートカット表 | `Esc / Q` 削除、X ボタン (全 OS) と Ctrl+C (Unix: graceful / Windows: 即終了) を残す |
+
+### 11.4 サブフェーズ分割 (実装手順)
+
+| サブ | 内容 | 工数 |
+|---|---|---|
+| 1.14.0 | **F1 バグ真因調査** (実機テスト + ログ採取 + ebitenui/GLFW ソース確認) | 0.3 日 |
+| 1.14.1 | `killswitch.Install()` に `runtime.GOOS == "windows"` ガード追加 (Windows では no-op) | 0.2 日 |
+| 1.14.2 | `killswitch.Tick()` から `Esc` 検出削除、`escPressed` field を完全削除 (`Triggered()` は `triggered.Load()` のみ) | 0.1 日 |
+| 1.14.3 | `internal/game/game.go` から `killswitch.Tick()` 呼び出し削除 | 0.1 日 |
+| 1.14.4 | `internal/tweaks/panel.go` hint テキスト更新 + Quit ボタンコメント修正 | 0.1 日 |
+| 1.14.5 | ユニットテスト更新 (`TestKillSwitch_EscPressed` 削除) | 0.2 日 |
+| 1.14.6 | code-reviewer + visual test (F1 で Tweaks パネル表示確認、X ボタンでアプリ終了確認) | 0.3 日 |
+| **合計** | | **1.3 日** |
+
+### 11.5 完了基準 (DoD)
+
+- [ ] **F1 バグの真因が特定・文書化されている** (Phase 1.14.0)
+- [ ] F1 押下で Tweaks パネル (Settings ボタン + マイク ComboBox) が表示される (即終了しない)
+- [ ] F1 もう一度押下で Tweaks パネルが閉じる
+- [ ] Ctrl+Shift+H 押下で全 UI が非表示、もう一度で復帰
+- [ ] Ctrl+Shift+H を 5 回連続押下してもアプリが即終了しない
+- [ ] Esc 押下は何もしない (F1 表示トグルとも独立)
+- [ ] ウィンドウの閉じる X ボタンクリックでアプリが graceful 終了 (全 OS)
+- [ ] Ctrl+C (Unix) でアプリが graceful 終了 (`signal.Notify` 経由、終了コード 0)
+- [ ] Ctrl+C (Windows, PowerShell から) でアプリが終了 (Go runtime デフォルト、即終了)
+- [ ] `go test ./...` 全 pass
+- [ ] code-reviewer APPROVE
+- [ ] yosia さん visual test (Phase 1.13 visual test の再現手順で確認)
+
+### 11.6 リスク・懸念
+
+| # | リスク | 対策 |
+|---|---|---|
+| 1 | **F1 バグの真因が不明** | Phase 1.14.0 で真因調査を必須化。真因不明のまま実装すると再発リスク。候補: ebitenui フォーカス処理、GLFW key event、別キー同時押し |
+| 2 | **Windows で Ctrl+C が graceful 終了しない** | 仕様として許容。Windows の推奨終了方法は X ボタン (GLFW close callback → graceful)。Ctrl+C は Go runtime デフォルト (os.Exit(2)) のフォールバック |
+| 3 | **`internal/killswitch/` パッケージを完全削除すべき?** | 将来 `syscall.SIGTERM` (Unix) や Windows の CTRL_BREAK_EVENT をハンドルしたくなった時のために、パッケージは **残す** のが安全。`Install()` は Windows で no-op |
+| 4 | **Esc キーが将来必要になったら?** | 別フェーズ (Phase 2+) で復活検討。今は削除 |
+
+### 11.7 決定事項 (yosia さんから)
+
+- **A**: 終了ショートカット削除、X ボタンに統一 ← **確定** (2026-06-17)
+
+### 11.8 関連ドキュメント
+
+- `docs/PLAN.md` Section 5: Phase 1.14 行追加
+- `docs/PLAN.md` Section 7 (kill switch 章): 削除 or 「signal.Notify (Unix only)」と注記
+- `README.md` 機能リスト / ショートカット表: Esc / Q 削除、X ボタン (全 OS) + Ctrl+C (Unix: graceful / Windows: 即終了) を残す
+- `CONTEXT_MEMORY.md`: メモリ 1379 参照 (終了ショートカット使用禁止)

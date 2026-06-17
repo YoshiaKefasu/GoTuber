@@ -163,7 +163,7 @@ python tools/build_default_character.py <入力フォルダ> \
   - 自動まばたき (D/E/F 切替)
   - メインマイク口パク (A/B/C 切替)
   - F1 で Tweaks パネル
-  - Esc / Q / Ctrl+C で終了
+  - ~~Esc / Q で終了~~ → Phase 1.14 で削除予定、ウィンドウの X ボタン (全 OS graceful) または Ctrl+C (Unix: graceful / Windows: 即終了) で閉じる
   - OBS ウィンドウキャプチャで透過表示される
 
 **DoD**: 全機能 OK 確認 → Phase 1 完全完了宣言

@@ -21,7 +21,7 @@
 - **クリックスルー** — キャラの背後をクリックできる（配下アプリの操作を邪魔しない）
 - **Tweaks パネル** — 追従速度・自動まばたき ON/OFF・口パク ON/OFF を `F1` キーまたは Quit ボタンで操作
 - **CJK フォント埋め込み** — Gen Interface JP Regular (Inter + Noto Sans JP) をバイナリ同梱
-- **Kill Switch** — `Esc` キー / `Q` キー / `Ctrl+C` / Tweaks の Quit ボタン で即終了
+- **終了** — **ウィンドウの閉じる X ボタン** (全 OS graceful) または **Ctrl+C** (Unix: graceful / Windows: 即終了)。`Esc` / `Q` キーでの終了は削除予定 (Phase 1.14)
 - **元 `src/character-config.js` 互換** — `basePath`, `eyesOpen`, `eyesClosed`, `close` の camelCase キー (Phase 1.12 で port)
 - **マイクデバイス選択** (Phase 1.13a 予定) — F1 → Settings → ドロップダウンで OS 全入力デバイスから選択、`os.UserConfigDir()/GoTuber/config.toml` に保存して再起動時に復元
 
@@ -62,7 +62,7 @@
 7. 喋る → キャラの口が動く
 8. (Phase 2) カメラの前に座る → 顔でキャラが動く
 9. Tweaks を弄りたい時 → F1 キー
-10. 終了したい時 → Esc キー / Ctrl+C
+10. 終了したい時 → ウィンドウの X ボタン (推奨、全 OS graceful) または Ctrl+C (Unix: graceful / Windows: 即終了)
 ```
 
 ## 動作環境
@@ -232,9 +232,11 @@ python tools/slice_character_sheets.py --help
 | キー | 動作 |
 |---|---|
 | `F1` | Tweaks パネル表示/非表示 |
-| `Esc` | 終了 |
-| `Q` | 終了 |
-| `Ctrl+C` | 終了（コンソールから） |
+| `Ctrl+Shift+H` | 全 UI 非表示/再表示 (Phase 1.13b) |
+| `Ctrl+C` | 終了（コンソールから）| Unix: graceful (`signal.Notify` 経由) / Windows: Go runtime デフォルト即終了 |
+| **ウィンドウの X ボタン** | 終了 (推奨) |
+
+> **Phase 1.14 で削除予定**: `Esc` / `Q` キーの kill switch は F1 / Esc 押下で即終了バグの原因。真因は不明 (Ebitengine v2.9.9 に SIGINT handler なし、競合説は否定済み)。
 
 マウス操作: キャラに向かって顔を向ける（5×5 グリッド追従）。
 
@@ -276,7 +278,7 @@ GoTuber/
 │   ├── requirements.txt     # Python 依存
 │   └── LICENSE-third-party  # 依存ライセンス一覧
 ├── docs/                    # 設計ドキュメント
-│   ├── PLAN.md              # 全体設計 (v0.4.3)
+│   ├── PLAN.md              # 全体設計 (v0.4.4)
 │   ├── PHASE1.md            # Phase 1 詳細設計
 │   ├── PHASE2.md            # Phase 2 詳細設計 (保留中)
 │   ├── PHASE3.md            # Phase 3 詳細設計
@@ -295,8 +297,9 @@ GoTuber/
 | Phase | 状態 | 内容 |
 |---|---|---|
 | **Phase 1.1 〜 1.12** | ✅ **完了** | MVP: 透過 + クリックスルー + アトラス + マウス追従 (Y軸反転なし) + まばたき + メインマイク口パク + Tweaks + CJK フォント + ビルドスクリプト + slice ツール (Phase 1.12 で元 648 行版 MIT 継承) |
-| **Phase 1.13b** | 🔜 予定 | UI 非表示ショートカット (`Ctrl+Shift+H` で Tweaks + 設定 UI を**全部トグル**表示/非表示。OBS ウィンドウキャプチャで UI が映り込まないようにする) |
-| **Phase 1.13a** | 🔜 予定 | マイク選択 + TOML 永続化 — malgo `Devices` 列挙 → ebitenui `ListComboButton` (ComboBox) ドロップダウン → 選択デバイスの malgo 内部 ID を `os.UserConfigDir()/GoTuber/config.toml` に保存 → 再起動時復元 (ID 照合で重複表示名も問題なし) |
+| **Phase 1.13b** | ✅ 完了 | UI 非表示ショートカット (`Ctrl+Shift+H` で Tweaks + 設定 UI を**全部トグル**表示/非表示。OBS ウィンドウキャプチャで UI が映り込まないようにする) |
+| **Phase 1.13a** | ✅ 完了 | マイク選択 + TOML 永続化 — malgo `Devices` 列挙 → ebitenui `ListComboButton` (ComboBox) ドロップダウン → 選択デバイスの malgo 内部 ID を `os.UserConfigDir()/GoTuber/config.toml` に保存 → 再起動時復元 (ID 照合で重複表示名も問題なし) |
+| **Phase 1.14** | 🔜 予定 | **終了ショートカット削除** — `Esc` / `Q` キー検出と `killswitch.Install()` の Windows 限定削除。**Unix は `signal.Notify` 維持** (Ctrl+C graceful)、**Windows は削除** (Ctrl+C 即終了、推奨 X ボタン)。原因: Phase 1.13 visual test で F1 / Esc 押下時に即終了バグ発覚。**真因不明** (Ebitengine v2.9.9 に SIGINT handler なし) |
 | Phase 2 | **保留中** | カメラ VTuber: 顔追従 + 口の自動検出（Q8 で再評価待ち） |
 | Phase 3 | 未着手 | VMC Protocol 出力 |
 
@@ -306,9 +309,11 @@ GoTuber/
 
 | ショートカット | 機能 | Phase |
 |---|---|---|
-| `Esc` | 終了 (kill switch) | 1.1 |
 | `F1` | Tweaks パネル表示/非表示 | 1.8 |
 | `Ctrl+Shift+H` | 全ての UI (Tweaks + 設定) を**一括トグル**表示/非表示。**配信時に使用** (OBS ウィンドウキャプチャで UI が映らない) | 1.13b (予定) |
+| **ウィンドウ X ボタン** | 終了 (推奨) | 1.1 |
+| ~~`Esc` / `Q`~~ | ~~終了 (kill switch)~~ | **削除予定 (Phase 1.14)**: F1 / Esc 押下で即終了バグの原因。真因不明 |
+| `Ctrl+C` | 終了 (コンソールから) | Unix: graceful (`signal.Notify` 経由) / Windows: Go runtime デフォルト即終了 |
 
 ## テスト
 
@@ -346,11 +351,12 @@ Phase 1.10 時点で:
 
 ✅ **Phase 1 コア完了 (1.1〜1.12)** — コードレビュー対応済み、`go test ./...` 全パス (Windows バイナリ 19.5 MB / Linux バイナリ 25 MB)。キャラクターシステムは元 [tomari-guruguru](https://github.com/rotejin/tomari-guruguru) から 100% port (camelCase 設定、Y軸反転なし、1200×1200 anchored WebP、元 648 行スライスツール MIT 継承)。
 
-🔜 **次の予定**: Phase 1.13b (UI 非表示ショートカット) → Phase 1.13a (マイク選択永続化)。
+🔜 **次の予定**: Phase 1.14 (終了ショートカット削除 + kill switch 仕様整理)。
 
-- プラン: [docs/PLAN.md](docs/PLAN.md) v0.4.3
+- プラン: [docs/PLAN.md](docs/PLAN.md) v0.4.4
 - Phase 1.12 詳細: [docs/PHASE1.md](docs/PHASE1.md) Section 9
 - Phase 1.13 (1.13a/1.13b) 詳細: [docs/PHASE1.md](docs/PHASE1.md) Section 10
+- Phase 1.14 詳細: [docs/PHASE1.md](docs/PHASE1.md) Section 11
 - 設計判断: pure Go 書き直し採用（Wails / headless JS 比較の上、Section 0.5 参照）
 - ビルド方針: Windows 10/11（mingw-w64 クロスコンパイル）または WSL Ubuntu（gcc）
 - **視覚テストはユーザー側で実施予定**（実装完了 → 実行確認は手動）
