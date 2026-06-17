@@ -76,6 +76,30 @@ python tools/build_default_character.py <入力フォルダ> \
 
 **工数**: 1-2 時間
 
+### 1.5. 音声ファイル再生 (Q6 / Phase 1.5+)
+
+**背景**: Phase 1 はマイク入力のみ。音楽ファイル (.mp3/.wav) や音声ファイルを再生してキャラクターの口をパクパクさせる機能 (リップシンク動画作成用途) は、Q6 で「リアルタイムマイクと同時使用しないため優先度低い」と判断し Phase 1.5+ に保留していた。公開リリースまでにユーザーニーズがあれば復活。
+
+**実装範囲**:
+
+- Ebitengine v2 の `audio` パッケージ (`mp3` / `wav` / `vorbis` デコーダー) を初期化
+- ファイル選択 UI (Tweaks パネルに "Play Audio File" ボタン + ネイティブダイアログ)
+- 既存 `Mover` (RMS + Envelope + MouthTracker) を audio ファイル再生にも流用
+- Phase 1.7 の malgo と同時に動作させる (e.g. マイク OFF + ファイル ON でリップシンク動画作成)
+
+**非採用案**:
+
+- Ebitengine audio + malgo 出力の共存: 同一プロセス内 2 つの audio context は実装複雑
+- ffmpeg 経由: 外部依存追加
+
+**DoD**:
+
+- 任意の mp3/wav を読み込んでキャラクターが口に反映
+- Tweaks で再生 / 一時停止 / ファイル選択
+- malgo マイクと排他利用 (両方 ON は不可)
+
+**工数**: 4-6 時間
+
 ---
 
 ## 🟡 中優先度
