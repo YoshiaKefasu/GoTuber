@@ -649,3 +649,54 @@ if g.firstUpdate {
 - Windows 専用の `WS_EX_TRANSPARENT` を client area のみに限定する (CGo 必須)
 - Ebitengine v2 がウィンドウ decoration 用の独立 API を提供するのを待つ
 - 現状は YAGNI で firstUpdate 1 回呼び出しで十分
+
+---
+
+## 12. Phase 1.14.10: passthrough 全面廃止 (X ボタン常時有効化) — **2026-06-17 確定**
+
+### 背景
+
+Phase 1.14.9 firstUpdate fix 後も **F1 パネル非表示時に X ボタンが通過する**ことが yosia さん実機 visual test で発覚。ホバーしても赤く光らない (Windows から見るとウィンドウがマウスに対して完全透明扱い)。
+
+`SetWindowMousePassthrough(true)` = `WS_EX_TRANSPARENT` = ウィンドウ全体 (タイトルバー含む) クリック透過。Ebitengine v2.9.9 の純粋な API では per-region passthrough は不可能。Win32 API (CGo) は工数大、FramelessWindow 自前タイトルバー描画は工数中。
+
+### 決定
+
+**`passthroughDesired` を常に `false` 返す** = passthrough 全面廃止。X ボタン / 最小化 / 最大化が常に効く。
+
+**犠牲**: OBS クリック透過 (キャラ部分クリックが背後のウィンドウに届かない)。`ScreenTransparent: true` は維持するので OBS ウィンドウキャプチャは引き続き可能 (背景透過は維持)。
+
+### 修正
+
+`internal/game/game.go` の `passthroughDesired` を変更:
+
+```go
+// 旧:
+// func passthroughDesired(panelVisible, uiHidden bool) bool {
+//     return !(panelVisible && !uiHidden)
+// }
+
+// 新 (Phase 1.14.10):
+func passthroughDesired(panelVisible, uiHidden bool) bool {
+    return false
+}
+```
+
+`applyPassthrough()` と Phase 1.14.9 firstUpdate 呼び出しはそのまま残す (冗長だが、Phase 2+ でクリック透過を復活する時のアンカーとして機能)。
+
+### 影響範囲
+
+- ✅ X ボタン / 最小化 / 最大化が常に効く
+- ✅ タイトルバーホバーでハイライト表示
+- ✅ Tweaks パネル内クリック受付 (PanelVisible=true 時は元から passthrough=false)
+- ⚠️ キャラ部分クリックが背後に届かない (OBS クリック透過廃止)
+- ⚠️ ユーザーはキャラ上で右クリック等のデスクトップ操作不可
+
+### DoD
+
+- [ ] yosia さん visual test: F1 パネル非表示時に X ボタンクリックでアプリ終了
+- [ ] X ボタン / 最小化 / 最大化にマウスを乗せると Windows 標準のハイライト表示 (赤・青・黄)
+- [ ] F1 でパネル表示 → X / 最小化 / 最大化クリックで全て反応する (Phase 1.14.9 + 1.14.10)
+- [ ] `go test ./...` 全 pass
+- [ ] code-reviewer APPROVE
+
