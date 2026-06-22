@@ -102,7 +102,7 @@ func init() {
 		g.SetSupervisor(supervisor)
 		// Phase 2.7: supervisor 起動後、mp_server.py を spawn (失敗しても mouse fallback で継続)。
 		if err := supervisor.StartMPServer(); err != nil {
-			log.Printf("camera: mp_server.py start failed (will auto-restart on crash): %v", err)
+			log.Printf("camera: mp_server.py start failed (monitorMPServer will retry after 1s backoff): %v", err)
 		}
 
 		// 60Hz で supervisor.Mode() → game.SetCameraMode() 反映 goroutine。

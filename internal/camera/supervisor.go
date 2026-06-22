@@ -38,6 +38,7 @@ package camera
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
@@ -104,6 +105,8 @@ const (
 	mpServerMaxFails       = 5 // 5回失敗で manual restart 要求
 )
 
+const errMPServerMaxFails = "mp_server.py 5回連続失敗、手動再起動必要"
+
 // Supervisor は L1 (CameraTracker) と L2 (MPClient) の lifecycle +
 // mouse/camera 排他制御を管理する L3 supervisor loop。
 //
@@ -150,6 +153,7 @@ type Supervisor struct {
 	mpServerPath    string
 	mpServerDone    chan error
 	mpServerEnabled bool
+	mpServerRetry   bool
 	mpServerFails   int
 	mpServerBackoff time.Duration
 
@@ -247,7 +251,7 @@ func (s *Supervisor) Start(ctx context.Context) error {
 	// L1 CameraTracker 起動 (nil なら skip、YAGNI: supervisor 単体テスト用)
 	if s.tracker != nil {
 		if err := s.tracker.Start(loopCtx); err != nil {
-			s.setLastError("tracker.Start: " + err.Error())
+			s.setLastErrorLocked("tracker.Start: " + err.Error())
 			return err
 		}
 		log.Printf("camera: supervisor: tracker started")
@@ -296,6 +300,10 @@ func (s *Supervisor) Stop() error {
 	s.loopCtx = nil
 	s.mu.Unlock()
 
+	if err := s.stopMPServer(); err != nil {
+		log.Printf("camera: supervisor: mp_server.py stop error (ignored): %v", err)
+	}
+
 	// supervisor loop + MPClient.ReceiveLoop の終了を待つ
 	s.wg.Wait()
 
@@ -313,9 +321,6 @@ func (s *Supervisor) Stop() error {
 			log.Printf("camera: supervisor: mpclient.Close error (ignored): %v", err)
 		}
 	}
-	if err := s.stopMPServer(); err != nil {
-		log.Printf("camera: supervisor: mp_server.py stop error (ignored): %v", err)
-	}
 	if s.blinkFilter != nil {
 		s.blinkFilter.Reset()
 	}
@@ -323,6 +328,22 @@ func (s *Supervisor) Stop() error {
 	s.stateObserver.running.Store(false)
 	log.Printf("camera: supervisor stopped")
 	return nil
+}
+
+// anyToString は recover() が返す any (interface{}) を string に変換する。
+//
+// supervisorLoop の defer recover 専用ヘルパー。
+func anyToString(v any) string {
+	if v == nil {
+		return ""
+	}
+	if err, ok := v.(error); ok {
+		return err.Error()
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return fmt.Sprintf("%v", v)
 }
 
 // supervisorLoop は 60Hz で mpclient.Latest() を呼び、顔検出判定 → mouse/camera 切替。
@@ -616,8 +637,12 @@ func (s *Supervisor) StartMPServer() error {
 func (s *Supervisor) startMPServer() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.mpServerEnabled = true
+	s.mpServerRetry = true
+	return s.startMPServerLocked()
+}
 
+// startMPServerLocked は mp_server.py を起動する内部メソッド (mutex 保持下)。
+func (s *Supervisor) startMPServerLocked() error {
 	if s.mpServerCmd != nil && s.mpServerDone != nil {
 		select {
 		case <-s.mpServerDone:
@@ -625,6 +650,9 @@ func (s *Supervisor) startMPServer() error {
 		default:
 			return nil
 		}
+	}
+	if s.mpServerEnabled && s.mpServerCmd != nil {
+		return nil
 	}
 
 	pythonExe, err := pythonExecutable()
@@ -642,36 +670,46 @@ func (s *Supervisor) startMPServer() error {
 	}
 	cmd := exec.CommandContext(ctx, pythonExe, mpServerPath)
 	if err := cmd.Start(); err != nil {
-		return err
+		return fmt.Errorf("mp_server.py start failed: %w", err)
 	}
 
 	done := make(chan error, 1)
+	s.wg.Add(1)
 	go func() {
+		defer s.wg.Done()
 		done <- cmd.Wait()
 	}()
 
 	s.mpServerCmd = cmd
 	s.mpServerPath = mpServerPath
 	s.mpServerDone = done
+	s.mpServerEnabled = true
+	s.mpServerFails = 0
+	s.mpServerBackoff = 0
 	log.Printf("camera: supervisor: mp_server.py started (pid=%d, path=%s)", cmd.Process.Pid, mpServerPath)
 	return nil
 }
 
 // stopMPServer は mp_server.py サブプロセスを graceful shutdown する。
 //
-// Phase 2.7: SIGTERM 相当の Interrupt → 5秒待ち → Kill。Windows では Interrupt が
-// 未対応の可能性があるため、失敗時も Kill fallback でプロセス残留を避ける。
+// Phase 2.7.2: SIGTERM 相当の Interrupt → 待機 → Kill。Windows は Interrupt が
+// 未対応の可能性が高く、配信停止体感を優先して待機を 1 秒に短縮する。
 func (s *Supervisor) stopMPServer() error {
 	s.mu.Lock()
 	cmd := s.mpServerCmd
 	done := s.mpServerDone
 	s.mpServerCmd = nil
 	s.mpServerDone = nil
+	s.mpServerEnabled = false
+	s.mpServerRetry = false
+	s.mpServerFails = 0
 	s.mu.Unlock()
 
 	if cmd == nil || cmd.Process == nil {
 		return nil
 	}
+	// done != nil チェック: startMPServer 経由で必ず作られるが、Stop 経由や
+	// 初期状態では nil の可能性がある。nil チェックで早期 return。
 	if done != nil {
 		select {
 		case <-done:
@@ -683,11 +721,17 @@ func (s *Supervisor) stopMPServer() error {
 	if runtime.GOOS != "windows" {
 		_ = cmd.Process.Signal(os.Interrupt)
 	}
+	gracefulTimeout := 5 * time.Second
+	if runtime.GOOS == "windows" {
+		// Windows: Python SIGTERM handler が機能しないことが多い。
+		// cv2.VideoCapture.release 中の 5秒は体感が悪いため 1秒に短縮する。
+		gracefulTimeout = 1 * time.Second
+	}
 	if done != nil {
 		select {
 		case <-done:
 			return nil
-		case <-time.After(5 * time.Second):
+		case <-time.After(gracefulTimeout):
 		}
 	}
 	return cmd.Process.Kill()
@@ -699,13 +743,13 @@ func (s *Supervisor) stopMPServer() error {
 // GoTuber 本体に伝播させず、5回連続失敗で manual restart 要求を lastError に残す。
 func (s *Supervisor) monitorMPServer() error {
 	s.mu.Lock()
-	if !s.mpServerEnabled {
-		s.mu.Unlock()
+	defer s.mu.Unlock()
+
+	if !s.mpServerRetry {
 		return nil
 	}
 	if s.mpServerFails >= mpServerMaxFails {
-		s.mu.Unlock()
-		s.setLastError("mp_server.py 5回連続失敗、手動再起動必要")
+		s.setLastErrorLocked(errMPServerMaxFails)
 		return nil
 	}
 
@@ -714,14 +758,14 @@ func (s *Supervisor) monitorMPServer() error {
 		case err := <-s.mpServerDone:
 			s.mpServerCmd = nil
 			s.mpServerDone = nil
+			s.mpServerEnabled = false
 			s.mpServerFails++
 			s.mpServerBackoff = nextMPServerBackoff(s.mpServerFails)
 			if err != nil {
 				s.setLastErrorLocked("mp_server.py exited: " + err.Error())
 			}
-			log.Printf("camera: supervisor: mp_server.py exited (fail=%d, backoff=%v)", s.mpServerFails, s.mpServerBackoff)
+			log.Printf("camera: supervisor: mp_server.py exited (fail count %d, backoff %v)", s.mpServerFails, s.mpServerBackoff)
 		default:
-			s.mu.Unlock()
 			return nil
 		}
 	}
@@ -731,21 +775,17 @@ func (s *Supervisor) monitorMPServer() error {
 		if s.mpServerBackoff < 0 {
 			s.mpServerBackoff = 0
 		}
-		s.mu.Unlock()
 		return nil
 	}
-	s.mu.Unlock()
 
-	if err := s.startMPServer(); err != nil {
-		s.mu.Lock()
+	if err := s.startMPServerLocked(); err != nil {
 		s.mpServerFails++
 		s.mpServerBackoff = nextMPServerBackoff(s.mpServerFails)
 		if s.mpServerFails >= mpServerMaxFails {
-			s.setLastErrorLocked("mp_server.py 5回連続失敗、手動再起動必要")
+			s.setLastErrorLocked(errMPServerMaxFails)
 		} else {
 			s.setLastErrorLocked("mp_server.py start failed: " + err.Error())
 		}
-		s.mu.Unlock()
 		return err
 	}
 	return nil
@@ -810,11 +850,19 @@ func nextMPServerBackoff(failCount int) time.Duration {
 // atomic.Pointer[string] は Go 1.19+ の API。エラーメッセージは string として
 // immutable に保存される (コピーコスト削減のため unsafe.Pointer 経由)。
 func (s *Supervisor) setLastError(msg string) {
-	s.stateObserver.lastError.Store(&msg)
-	log.Printf("camera: supervisor error: %s", msg)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.storeLastError(msg)
 }
 
 func (s *Supervisor) setLastErrorLocked(msg string) {
+	s.storeLastError(msg)
+}
+
+func (s *Supervisor) storeLastError(msg string) {
+	if cur := s.stateObserver.lastError.Load(); cur != nil && *cur == msg {
+		return
+	}
 	s.stateObserver.lastError.Store(&msg)
 	log.Printf("camera: supervisor error: %s", msg)
 }
@@ -887,21 +935,4 @@ func (s *Supervisor) CameraFps() int64 {
 // DetectionFps は MPClient の累計受信検出数を返す (debug 用)。
 func (s *Supervisor) DetectionFps() int64 {
 	return s.stateObserver.detectionFps.Load()
-}
-
-// anyToString は recover() が返す any (interface{}) を string に変換する。
-//
-// fmt.Sprintf("%v", v) は recover() で panic value を文字列化する標準パターン。
-// supervisorLoop の defer recover 専用ヘルパー。
-func anyToString(v any) string {
-	if v == nil {
-		return "<nil>"
-	}
-	if err, ok := v.(error); ok {
-		return err.Error()
-	}
-	if s, ok := v.(string); ok {
-		return s
-	}
-	return "non-string panic value"
 }

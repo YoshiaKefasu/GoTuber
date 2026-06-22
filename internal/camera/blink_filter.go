@@ -1,6 +1,9 @@
 package camera
 
-import "math"
+import (
+	"math"
+	"sync"
+)
 
 // BlinkFilter は EAR 値にヒステリシスを被せて 3 状態 (Open/Half/Closed) を返すフィルタ。
 //
@@ -24,11 +27,12 @@ import "math"
 // 60Hz 程度の頻度で Update() を呼ぶ想定。
 //
 // 初期状態: BlinkOpen (閉眼状態なし、開眼状態から開始)。
-// mutex は持たない。Phase 2.5 supervisor loop など 1 goroutine から呼ぶ想定で、
-// 複数 goroutine 共有が必要になった時点で呼び出し側か本型に同期を追加する。
+// Phase 2.7.1: supervisor loop と game.Update の別 goroutine から読まれるため、
+// BlinkFilter 内部で同期する。
 //
 // Phase 2.6: ヒステリシス実装、別レイヤ型。
 type BlinkFilter struct {
+	mu    sync.RWMutex
 	state BlinkState
 }
 
@@ -70,6 +74,8 @@ func NewBlinkFilter() *BlinkFilter {
 // 単一ノイズフレームが意図せず瞬き判定を短縮させる可能性がある (Phase 2.4 EARToBlink と同一挙動、意図的)。
 func (f *BlinkFilter) Update(earLeft, earRight float64) BlinkState {
 	earAvg := averageEAR(earLeft, earRight)
+	f.mu.Lock()
+	defer f.mu.Unlock()
 
 	if invalidEAR(earAvg) {
 		f.state = BlinkOpen
@@ -98,12 +104,16 @@ func (f *BlinkFilter) Update(earLeft, earRight float64) BlinkState {
 	return f.state
 }
 
-// State は現在の BlinkState を返す (atomic 読み出しなし、純粋読み取り)。
+// State は現在の BlinkState を返す (同期済み、純粋読み取り)。
 func (f *BlinkFilter) State() BlinkState {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 	return f.state
 }
 
 // Reset は BlinkFilter を BlinkOpen 初期状態にリセットする (テスト用途)。
 func (f *BlinkFilter) Reset() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.state = BlinkOpen
 }

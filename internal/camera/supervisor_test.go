@@ -277,6 +277,7 @@ func TestSupervisor_MPServer_Stop_NeverStarted_NoPanic(t *testing.T) {
 // TestSupervisor_MPServer_MaxFails_SetLastError は 5回失敗後に manual restart 要求を記録することを確認。
 func TestSupervisor_MPServer_MaxFails_SetLastError(t *testing.T) {
 	s := NewSupervisor(nil, nil, nil)
+	s.mpServerRetry = true
 	s.mpServerEnabled = true
 	s.mpServerFails = mpServerMaxFails
 	if err := s.monitorMPServer(); err != nil {
