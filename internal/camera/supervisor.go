@@ -361,7 +361,11 @@ func (s *Supervisor) supervisorLoop(ctx context.Context) {
 	}
 }
 
-// tickDetection は mpclient.Latest() を呼び、faceDetected を判定、mode 切替。
+// tickDetection はテスト用途。supervisorLoop では tickDetectionSnapshot + tickCell を
+// 直接呼ぶ。テストでは supervisor 起動不要で state を直接操作できる。
+//
+// Phase 2.5.1: 削除も検討したが、後方互換性のため残す (Phase 2.6+ で再評価)。
+// mpclient.Latest() を呼び、faceDetected を判定、mode 切替。
 //
 // mutex 保護下で lastDetected / faceDetected / mode を更新し、
 // supervisorState.mode (atomic) も同期する。
@@ -569,9 +573,11 @@ func (s *Supervisor) Mode() CameraMode {
 
 // CameraCell は camera mode 時の atlas cell (row, col) を返す。
 //
-// Phase 2.5 最小実装: mpclient.Latest() の yaw/pitch を mapper (Phase 2.4) で
-// 5x5 セルに変換。faceDetected が false (mouse mode) の場合は (2, 2) center を返す
-// (呼び出し側で mode を確認すべきだが、安全のため center fallback)。
+// Phase 2.5.1: supervisorLoop の tickCell() が cellPtr に書き込んだ cellState を
+// atomic.Pointer で読み出して返す。毎フレーム supervisorLoop が mpclient.Latest() を
+// 取得して mapper.PitchToRow / YawToCol / EARToBlink で cell + blink を計算し、
+// 結果を cellPtr に Store する。game.Draw() / Update() は mutex なしで読む。
+// 最新 cell がない場合は (2, 2, false) を返し、呼び出し側が fallback を選べるようにする。
 //
 // game.go の Update から呼ばれる。lock-free (mutex 不使用)。
 func (s *Supervisor) CameraCell() (row, col int, ok bool) {

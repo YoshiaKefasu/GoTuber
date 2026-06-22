@@ -27,9 +27,10 @@ import (
 //	ctx — supervisor loop の lifecycle context (cancel で graceful shutdown)
 //	g   — camera mode を反映する Game インスタンス (SetCameraMode() で毎フレーム更新)
 //
+// 戻り値 done は Phase 2.5.1 で追加した cleanup 完了通知チャネル。
 // `//go:build camera` 下の init() で設定される。
 // Phase 1 ビルドでは nil (= no-op)。
-type cameraHookFunc func(ctx context.Context, g *game.Game)
+type cameraHookFunc func(ctx context.Context, g *game.Game) (done <-chan struct{})
 
 // cameraHook は hook 実装への関数ポインタ。build tag 下で上書きされる。
 //
@@ -43,10 +44,12 @@ var cameraHook cameraHookFunc
 // Camera ビルド: init() で設定された hook を実行 (L1/L2/L3 supervisor 起動)。
 //
 // 呼び出し側: main() 内の game.New() 直後・ebiten.RunGameWithOptions() 直前を想定。
-// RunGameWithOptions は同期関数で戻らないため、hook は goroutine 起動する設計
-// (camera_hook_camera.go の実装で go func() {...}() を発行)。
-func runCameraHook(ctx context.Context, g *game.Game) {
+// Phase 2.5.1: 呼び出し側は RunGameWithOptions 終了後に ctx を cancel し、done を待つ。
+func runCameraHook(ctx context.Context, g *game.Game) <-chan struct{} {
 	if cameraHook != nil {
-		cameraHook(ctx, g)
+		return cameraHook(ctx, g)
 	}
+	done := make(chan struct{})
+	close(done)
+	return done
 }

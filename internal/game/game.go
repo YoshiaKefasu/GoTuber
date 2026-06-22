@@ -189,8 +189,18 @@ func (g *Game) Update() error {
 	// 自動まばたき
 	// Phase 2.5: camera mode では supervisor の EAR 判定を優先し、mouse mode は
 	// Phase 1.6 の blink scheduler を完全維持する。supervisor 未設定時は従来どおり。
+	// Phase 2.5.1: 顔未検出 1 秒 grace period 中は CameraCell() の ok=false を見て
+	// blink scheduler にフォールバックする。tickCell() は顔未検出フレームで
+	// eyesClosed=false を保存するため、EyesClosed() だけを見ると瞬きが 1 秒止まる。
 	if g.cameraMode.Load() == cameraModeCamera && g.supervisor != nil {
-		g.eyesClosed = g.supervisor.EyesClosed()
+		_, _, ok := g.supervisor.CameraCell()
+		if ok {
+			g.eyesClosed = g.supervisor.EyesClosed()
+		} else if g.tweaks.BlinkEnabled {
+			g.eyesClosed = g.blink.Update(time.Now())
+		} else {
+			g.eyesClosed = false
+		}
 	} else if g.tweaks.BlinkEnabled {
 		g.eyesClosed = g.blink.Update(time.Now())
 	} else {

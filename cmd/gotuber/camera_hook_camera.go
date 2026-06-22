@@ -71,12 +71,14 @@ const cameraModeUpdateInterval = 16 * time.Millisecond
 // 配信中可用性方針 (Section 1.1): Python サイドカー不在や OpenCV ロード失敗でも
 // GoTuber 本体は正常起動し、Phase 1 マウスモードで動作継続。
 func init() {
-	cameraHook = func(ctx context.Context, g *game.Game) {
+	cameraHook = func(ctx context.Context, g *game.Game) <-chan struct{} {
+		done := make(chan struct{})
 		// L1 CameraTracker 起動 (camera_open 失敗 → graceful degradation)
 		tracker := camera.NewCameraTracker(cameraID, framePort, width, height, jpegQuality)
 		if err := tracker.Start(ctx); err != nil {
 			log.Printf("camera: tracker.Start failed (continuing without camera): %v", err)
-			return
+			close(done)
+			return done
 		}
 
 		// L2 MPClient 起動 (port bind 失敗 → graceful degradation)
@@ -84,7 +86,8 @@ func init() {
 		if err != nil {
 			log.Printf("camera: NewMPClient failed (continuing without camera): %v", err)
 			tracker.Close()
-			return
+			close(done)
+			return done
 		}
 
 		// L3 Supervisor 起動 (tracker/mpclient 起動失敗 → graceful degradation)
@@ -93,13 +96,16 @@ func init() {
 			log.Printf("camera: supervisor.Start failed (continuing without camera): %v", err)
 			tracker.Close()
 			mpclient.Close()
-			return
+			close(done)
+			return done
 		}
 		g.SetSupervisor(supervisor)
 
 		// 60Hz で supervisor.Mode() → game.SetCameraMode() 反映 goroutine。
 		// 終了時 (ctx.Done): mouse mode (0) に戻して game に通知。
+		// Phase 2.5.1: goroutine 終了時に done を close し、main() が cleanup 完了を待てるようにする。
 		go func() {
+			defer close(done)
 			ticker := time.NewTicker(cameraModeUpdateInterval)
 			defer ticker.Stop()
 			defer supervisor.Stop()
@@ -113,5 +119,6 @@ func init() {
 				}
 			}
 		}()
+		return done
 	}
 }
