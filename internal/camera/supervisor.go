@@ -75,15 +75,9 @@ const (
 // 60Hz でも負荷は無視できる (実測 < 0.1% CPU、Phase 2.5 budget)。
 const supervisorLoopInterval = 16 * time.Millisecond
 
-// faceDetectionTimeoutSec は「最後の顔検出成功から現在時刻までの猶予秒」。
-//
-// 1.0 秒 (= 60Hz で約 60 フレーム) を超えたら mouse mode にフォールバックする。
-// docs/PHASE2.md §1.1 配信中可用性方針と整合。mapper.go の FaceDetected とは
-// 独立に supervisor 側で再評価 (supervisor loop は複数フレームを跨ぐ判定が必要なため)。
-//
-// 注: mapper.go の faceDetectionTimeoutSec (1.0) と同値。Phase 2.5 では重複だが、
-// supervisor は mapper より上位の layer なので独自定数で持つ (Phase 2.6 で統合予定)。
-const faceDetectionTimeoutSec = 1.0
+// supervisor 側は mapper.FaceDetected と独立に複数フレーム跨ぎ判定が必要なため、
+// supervisor の s.lastDetected は float64 で独自に保持する。閾値は mapper.go の
+// faceDetectionTimeoutSec (1.0) を import 経由で使う (Phase 2.7 で重複を解消)。
 
 // exponential backoff パラメータ (Section 1.1 配信中可用性方針)。
 //
