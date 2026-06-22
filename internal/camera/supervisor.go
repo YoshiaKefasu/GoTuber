@@ -628,7 +628,7 @@ func (s *Supervisor) StartMPServer() error {
 //
 // Phase 2.8: Tweaks panel の Manual Restart ボタンから呼ばれる公開 API。
 // Down 状態 (5回失敗到達) からの復帰、または任意タイミングの手動再起動用。
-// 成功時は新しい mp_server.py プロセスを起動し、backoff / fail count / lastError をリセットする。
+// 成功時のみ lastError をリセットする。fail count / backoff は手動連打で壊さないため保持する。
 func (s *Supervisor) RestartMPServer() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -636,15 +636,25 @@ func (s *Supervisor) RestartMPServer() error {
 	if s.mpServerCmd != nil && s.mpServerCmd.Process != nil {
 		_ = s.mpServerCmd.Process.Kill()
 	}
+	// Phase 2.8.1: Kill 直後の port 解放 race を避けるため、旧 process の Wait 完了を
+	// 最大 1 秒だけ待つ。超過時は配信中操作の体感を優先して次の起動へ進む。
+	if s.mpServerDone != nil {
+		select {
+		case <-s.mpServerDone:
+		case <-time.After(1 * time.Second):
+		}
+	}
 	s.mpServerCmd = nil
 	s.mpServerDone = nil
 	s.mpServerEnabled = false
 	s.mpServerRetry = true
-	s.mpServerFails = 0
-	s.mpServerBackoff = 0
-	s.clearLastErrorLocked()
 
-	return s.startMPServerLocked()
+	if err := s.startMPServerLocked(); err != nil {
+		s.setLastErrorLocked("mp_server.py manual restart failed: " + err.Error())
+		return err
+	}
+	s.clearLastErrorLocked()
+	return nil
 }
 
 // startMPServer は mp_server.py サブプロセスを起動する。

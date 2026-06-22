@@ -597,7 +597,7 @@ func (p *Panel) UpdateCameraStatus(mode int, mpRunning bool, lastErr *string) {
 	restartable := false
 
 	switch {
-	case !mpRunning && lastErr != nil:
+	case !mpRunning:
 		status = "Down"
 		restartable = true
 	case mpRunning && lastErr != nil:
