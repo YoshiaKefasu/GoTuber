@@ -5,6 +5,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"os"
@@ -246,6 +247,19 @@ func main() {
 	}()
 
 	g := game.New(atlas, mouse.NewFollower(0.3), blink.New(), mover, panel, tweaksState, devicesCh)
+
+	// Phase 2.5: camera supervisor 起動 (libzmq 利用可能時のみ動作)。
+	// `//go:build camera` ガード下の init() で cameraHook が設定される。
+	// Phase 1 ビルド (-tags なし): cameraHook は nil → runCameraHook は no-op、
+	//                            既存のマウス追従のみが動作 (Phase 1 ビルド影響なし)。
+	// Camera ビルド (-tags camera): init() で L1/L2/L3 supervisor を起動する hook が
+	//                              設定され、60Hz で mouse ↔ camera 排他制御が走る。
+	// 設計判断 (YAGNI): main.go 自体は build tag なしで 1 行追加のみ、
+	// カメラ固有コードは camera_hook_camera.go (`//go:build camera`) に分離。
+	// Go の build tag はファイル単位なので、main.go 内に直接 build tag 下の関数を
+	// 呼ぶコードは書けない (Phase 1 ビルドで未定義シンボルエラーになる)。
+	ctx := context.Background()
+	runCameraHook(ctx, g)
 
 	// ゲームループ
 	// ebiten.Termination は kill switch 発火時の正常終了として扱う（終了コード 0）

@@ -4,6 +4,7 @@ package game
 import (
 	"image/color"
 	"math"
+	"sync/atomic"
 	"time"
 
 	"github.com/YoshiaKefasu/GoTuber/internal/audio"
@@ -61,6 +62,21 @@ type Game struct {
 	// デバイス一覧を受け取るチャネル (buffered, 容量 1)。
 	// nil のときは select で default に流れる (テスト用最小初期化でも安全)。
 	devicesCh chan DeviceListMessage
+
+	// Phase 2.5: camera mode。60Hz で supervisor.Mode() から更新される。
+	// atomic.Int32 で supervisor loop と game loop 間の lock-free 同期。
+	// 値:
+	//   0 = CameraModeMouse (Phase 1 既定、mouse.Cell() を使用)
+	//   1 = CameraModeCamera (Phase 2、camera mapper を使う予定、Phase 2.5 は placeholder)
+	//
+	// YAGNI: camera パッケージの CameraMode enum を直接 import せずリテラル定数で
+	// 扱う。理由: camera パッケージの build tag 下ファイルを Phase 1 ビルドから
+	// 完全に分離するため (YAGNI な依存を排除)。
+	//
+	// Phase 1 ビルド: ゼロ値 (0 = CameraModeMouse) で固定、既存動作維持。
+	// Camera ビルド: camera_hook_camera.go の init() で起動された supervisor loop が
+	//               60Hz ごとに SetCameraMode(int(supervisor.Mode())) で更新。
+	cameraMode atomic.Int32
 }
 
 // New は新しい Game を作成する。
@@ -306,4 +322,26 @@ func (g *Game) ToggleUIHidden() {
 		g.panel.SetUIHidden(g.uiHidden)
 	}
 	g.applyPassthrough()
+}
+
+// SetCameraMode は camera mode を設定する (Phase 2.5)。
+//
+// camera_hook_camera.go (`//go:build camera`) の init() で起動された supervisor loop が
+// 60Hz ごとに supervisor.Mode() の値を読み取ってこのメソッドを呼ぶ。
+// Phase 1 ビルドでは呼ばれない (cameraHook が nil、runCameraHook が no-op)。
+//
+// 引数:
+//
+//	mode — 0 = CameraModeMouse (Phase 1 既定)、1 = CameraModeCamera (Phase 2)
+//
+// 実装メモ: 内部状態 cameraMode は atomic.Int32 なので lock-free 読み出し可能、
+//
+//	game.Update() の 60Hz hot path から mutex なしで参照できる。
+//
+// YAGNI: camera パッケージの enum を import せず int で扱う。Phase 1 ビルドでも
+//
+//	メソッド自体はビルドに含まれるが、camera_hook_camera.go (`//go:build camera`)
+//	からのみ呼ばれるので Phase 1 動作には影響しない。
+func (g *Game) SetCameraMode(mode int) {
+	g.cameraMode.Store(int32(mode))
 }
