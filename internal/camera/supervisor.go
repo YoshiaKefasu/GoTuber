@@ -25,9 +25,12 @@
 //	│ defer recover   │    │ defer recover      │
 //	└─────────────────┘    └────────────────────┘
 //
-// スコープ外 (Phase 2.7 で実装予定):
+// Phase 2.7:
+//   - BlinkFilter を tickCell / EyesClosed に統合
 //   - mp_server.py サブプロセス spawn・監視・再起動
-//   - 5 回連続失敗時の Tweaks "Camera Down" 表示
+//
+// スコープ外 (Phase 2.8 で実装予定):
+//   - 5 回連続失敗時の Tweaks "Camera Down" 表示 UI
 //
 // ビルドタグ: `//go:build camera` でガード。Phase 1 ビルドには影響しない。
 package camera
@@ -36,6 +39,10 @@ import (
 	"context"
 	"errors"
 	"log"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -90,6 +97,13 @@ const (
 	restartSuccessReset   = 3 // 連続 3 回成功でカウンタリセット
 )
 
+// Phase 2.7: mp_server.py サブプロセス再起動バックオフ。
+const (
+	mpServerInitialBackoff = 1 * time.Second
+	mpServerMaxBackoff     = 30 * time.Second
+	mpServerMaxFails       = 5 // 5回失敗で manual restart 要求
+)
+
 // Supervisor は L1 (CameraTracker) と L2 (MPClient) の lifecycle +
 // mouse/camera 排他制御を管理する L3 supervisor loop。
 //
@@ -124,8 +138,20 @@ type Supervisor struct {
 	faceDetected bool       // 顔検出状態 (1秒タイマーで判定)
 
 	// 起動・終了制御
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	loopCtx context.Context
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
+
+	// Phase 2.6: EAR ヒステリシスフィルタ (Phase 2.7 で supervisor 統合)。
+	blinkFilter *BlinkFilter
+
+	// Phase 2.7: mp_server.py サブプロセス管理。
+	mpServerCmd     *exec.Cmd
+	mpServerPath    string
+	mpServerDone    chan error
+	mpServerEnabled bool
+	mpServerFails   int
+	mpServerBackoff time.Duration
 
 	// 観測 (atomic observer、Phase 1.14 規約)
 	stateObserver *supervisorState
@@ -172,6 +198,7 @@ func NewSupervisor(tracker *CameraTracker, mpclient *MPClient, mouse *mouse.Foll
 		tracker:       tracker,
 		mpclient:      mpclient,
 		mouseFollower: mouse,
+		blinkFilter:   NewBlinkFilter(),
 		// mode はゼロ値 (CameraModeMouse) で OK、supervisorState.mode と同期される。
 		stateObserver: &supervisorState{},
 	}
@@ -202,6 +229,12 @@ func (s *Supervisor) Start(ctx context.Context) error {
 	}
 
 	loopCtx, cancel := context.WithCancel(ctx)
+	s.loopCtx = loopCtx
+	if s.blinkFilter == nil {
+		s.blinkFilter = NewBlinkFilter()
+	} else {
+		s.blinkFilter.Reset()
+	}
 	cleanupCtx := true
 	defer func() {
 		if !cleanupCtx {
@@ -260,6 +293,7 @@ func (s *Supervisor) Stop() error {
 		s.cancel()
 		s.cancel = nil
 	}
+	s.loopCtx = nil
 	s.mu.Unlock()
 
 	// supervisor loop + MPClient.ReceiveLoop の終了を待つ
@@ -279,6 +313,12 @@ func (s *Supervisor) Stop() error {
 			log.Printf("camera: supervisor: mpclient.Close error (ignored): %v", err)
 		}
 	}
+	if err := s.stopMPServer(); err != nil {
+		log.Printf("camera: supervisor: mp_server.py stop error (ignored): %v", err)
+	}
+	if s.blinkFilter != nil {
+		s.blinkFilter.Reset()
+	}
 
 	s.stateObserver.running.Store(false)
 	log.Printf("camera: supervisor stopped")
@@ -294,13 +334,13 @@ func (s *Supervisor) Stop() error {
 //  3. mode 切替: faceDetected && mode == Mouse → switchToCameraLocked
 //  4. mode 切替: !faceDetected && mode == Camera → switchToMouseLocked
 //  5. tracker/mpclient IsRunning() 監視 → 失敗時 exponential backoff で再起動
+//  6. mp_server.py サブプロセス監視 → 失敗時 exponential backoff で再起動
 //
 // 終了条件: loopCtx.Done() または panic (defer recover で吸収、goroutine graceful exit)。
 //
-// defer は LIFO 順で: recover → stateObserver.running.Store(false) → wg.Done。
-// この順序で panic 時もメインプロセス無影響 + 状態観測整合。
+// defer は LIFO 順で: recover → stateObserver.running.Store(false)。
+// wg.Done は起動側 goroutine の defer が担当し、panic 時もメインプロセス無影響 + 状態観測整合。
 func (s *Supervisor) supervisorLoop(ctx context.Context) {
-	defer s.wg.Done()
 	defer s.stateObserver.running.Store(false)
 
 	defer func() {
@@ -349,6 +389,9 @@ func (s *Supervisor) supervisorLoop(ctx context.Context) {
 				ctx, "mpclient", s.mpclient.IsRunning, s.startMPClient,
 				mpclientBackoff, mpclientFailCount, mpclientSuccessCount,
 			)
+		}
+		if err := s.monitorMPServer(); err != nil {
+			log.Printf("camera: supervisor: mp_server.py monitor error (ignored): %v", err)
 		}
 
 		// 3. FPS snapshot (debug 用、Tweaks 表示は Phase 2.8)
@@ -421,7 +464,10 @@ func (s *Supervisor) tickCell(dr DetectionResult, ok bool) {
 
 	row := PitchToRow(dr.Pitch)
 	col := YawToCol(dr.Yaw)
-	eyesClosed := EARToBlink(dr.EarLeft, dr.EarRight) == BlinkClosed
+	if s.blinkFilter == nil {
+		s.blinkFilter = NewBlinkFilter()
+	}
+	eyesClosed := s.blinkFilter.Update(dr.EarLeft, dr.EarRight) == BlinkClosed
 	s.cellPtr.Store(&cellState{row: row, col: col, eyesClosed: eyesClosed, ok: true})
 }
 
@@ -442,6 +488,9 @@ func (s *Supervisor) switchToCameraLocked() {
 func (s *Supervisor) switchToMouseLocked() {
 	s.mode = CameraModeMouse
 	s.stateObserver.mode.Store(int32(CameraModeMouse))
+	if s.blinkFilter != nil {
+		s.blinkFilter.Reset()
+	}
 	log.Printf("camera: supervisor: mode → Mouse (face lost or timeout)")
 }
 
@@ -552,11 +601,220 @@ func (s *Supervisor) startMPClient(ctx context.Context) error {
 	return nil
 }
 
+// StartMPServer は mp_server.py サブプロセスを起動する公開 wrapper。
+//
+// Phase 2.7: camera_hook_camera.go から起動 trigger するための薄い wrapper。
+// 起動失敗時も GoTuber 本体は継続し、以後 monitorMPServer が backoff 付き再起動を試みる。
+func (s *Supervisor) StartMPServer() error {
+	return s.startMPServer()
+}
+
+// startMPServer は mp_server.py サブプロセスを起動する。
+//
+// Phase 2.7: 冪等。既に起動中なら no-op。Python サイドカーの起動失敗は呼び出し側で
+// graceful degradation し、mouse mode で配信継続する。
+func (s *Supervisor) startMPServer() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mpServerEnabled = true
+
+	if s.mpServerCmd != nil && s.mpServerDone != nil {
+		select {
+		case <-s.mpServerDone:
+			// 終了済みなら下で再起動する。
+		default:
+			return nil
+		}
+	}
+
+	pythonExe, err := pythonExecutable()
+	if err != nil {
+		return err
+	}
+	mpServerPath, err := s.resolveMPServerPath()
+	if err != nil {
+		return err
+	}
+
+	ctx := s.loopCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cmd := exec.CommandContext(ctx, pythonExe, mpServerPath)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	s.mpServerCmd = cmd
+	s.mpServerPath = mpServerPath
+	s.mpServerDone = done
+	log.Printf("camera: supervisor: mp_server.py started (pid=%d, path=%s)", cmd.Process.Pid, mpServerPath)
+	return nil
+}
+
+// stopMPServer は mp_server.py サブプロセスを graceful shutdown する。
+//
+// Phase 2.7: SIGTERM 相当の Interrupt → 5秒待ち → Kill。Windows では Interrupt が
+// 未対応の可能性があるため、失敗時も Kill fallback でプロセス残留を避ける。
+func (s *Supervisor) stopMPServer() error {
+	s.mu.Lock()
+	cmd := s.mpServerCmd
+	done := s.mpServerDone
+	s.mpServerCmd = nil
+	s.mpServerDone = nil
+	s.mu.Unlock()
+
+	if cmd == nil || cmd.Process == nil {
+		return nil
+	}
+	if done != nil {
+		select {
+		case <-done:
+			return nil
+		default:
+		}
+	}
+
+	if runtime.GOOS != "windows" {
+		_ = cmd.Process.Signal(os.Interrupt)
+	}
+	if done != nil {
+		select {
+		case <-done:
+			return nil
+		case <-time.After(5 * time.Second):
+		}
+	}
+	return cmd.Process.Kill()
+}
+
+// monitorMPServer は mp_server.py の生存確認と backoff 付き再起動を行う。
+//
+// Phase 2.7: supervisorLoop から 60Hz で呼ぶ。実 subprocess の起動失敗や終了は
+// GoTuber 本体に伝播させず、5回連続失敗で manual restart 要求を lastError に残す。
+func (s *Supervisor) monitorMPServer() error {
+	s.mu.Lock()
+	if !s.mpServerEnabled {
+		s.mu.Unlock()
+		return nil
+	}
+	if s.mpServerFails >= mpServerMaxFails {
+		s.mu.Unlock()
+		s.setLastError("mp_server.py 5回連続失敗、手動再起動必要")
+		return nil
+	}
+
+	if s.mpServerDone != nil {
+		select {
+		case err := <-s.mpServerDone:
+			s.mpServerCmd = nil
+			s.mpServerDone = nil
+			s.mpServerFails++
+			s.mpServerBackoff = nextMPServerBackoff(s.mpServerFails)
+			if err != nil {
+				s.setLastErrorLocked("mp_server.py exited: " + err.Error())
+			}
+			log.Printf("camera: supervisor: mp_server.py exited (fail=%d, backoff=%v)", s.mpServerFails, s.mpServerBackoff)
+		default:
+			s.mu.Unlock()
+			return nil
+		}
+	}
+
+	if s.mpServerBackoff > 0 {
+		s.mpServerBackoff -= supervisorLoopInterval
+		if s.mpServerBackoff < 0 {
+			s.mpServerBackoff = 0
+		}
+		s.mu.Unlock()
+		return nil
+	}
+	s.mu.Unlock()
+
+	if err := s.startMPServer(); err != nil {
+		s.mu.Lock()
+		s.mpServerFails++
+		s.mpServerBackoff = nextMPServerBackoff(s.mpServerFails)
+		if s.mpServerFails >= mpServerMaxFails {
+			s.setLastErrorLocked("mp_server.py 5回連続失敗、手動再起動必要")
+		} else {
+			s.setLastErrorLocked("mp_server.py start failed: " + err.Error())
+		}
+		s.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+func (s *Supervisor) resolveMPServerPath() (string, error) {
+	if s.mpServerPath != "" {
+		return s.mpServerPath, nil
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for _, candidate := range []string{
+		filepath.Join(wd, "tools", "mp_server.py"),
+		filepath.Join(wd, "..", "..", "tools", "mp_server.py"),
+	} {
+		abs, err := filepath.Abs(candidate)
+		if err != nil {
+			continue
+		}
+		if _, err := os.Stat(abs); err == nil {
+			return abs, nil
+		}
+	}
+	return "", errors.New("tools/mp_server.py not found")
+}
+
+func pythonExecutable() (string, error) {
+	candidates := []string{"python3", "python"}
+	if runtime.GOOS == "windows" {
+		candidates = []string{"python.exe", "python3.exe", "python"}
+	}
+	for _, candidate := range candidates {
+		path, err := exec.LookPath(candidate)
+		if err == nil {
+			return path, nil
+		}
+	}
+	return "", errors.New("python executable not found")
+}
+
+func nextMPServerBackoff(failCount int) time.Duration {
+	if failCount <= 0 {
+		return 0
+	}
+	d := mpServerInitialBackoff
+	for i := 1; i < failCount; i++ {
+		d *= 2
+		if d >= mpServerMaxBackoff {
+			return mpServerMaxBackoff
+		}
+	}
+	if d > mpServerMaxBackoff {
+		return mpServerMaxBackoff
+	}
+	return d
+}
+
 // setLastError は stateObserver.lastError にエラーメッセージを保存する。
 //
 // atomic.Pointer[string] は Go 1.19+ の API。エラーメッセージは string として
 // immutable に保存される (コピーコスト削減のため unsafe.Pointer 経由)。
 func (s *Supervisor) setLastError(msg string) {
+	s.stateObserver.lastError.Store(&msg)
+	log.Printf("camera: supervisor error: %s", msg)
+}
+
+func (s *Supervisor) setLastErrorLocked(msg string) {
 	s.stateObserver.lastError.Store(&msg)
 	log.Printf("camera: supervisor error: %s", msg)
 }
@@ -575,7 +833,7 @@ func (s *Supervisor) Mode() CameraMode {
 //
 // Phase 2.5.1: supervisorLoop の tickCell() が cellPtr に書き込んだ cellState を
 // atomic.Pointer で読み出して返す。毎フレーム supervisorLoop が mpclient.Latest() を
-// 取得して mapper.PitchToRow / YawToCol / EARToBlink で cell + blink を計算し、
+// 取得して mapper.PitchToRow / YawToCol と BlinkFilter.Update で cell + blink を計算し、
 // 結果を cellPtr に Store する。game.Draw() / Update() は mutex なしで読む。
 // 最新 cell がない場合は (2, 2, false) を返し、呼び出し側が fallback を選べるようにする。
 //
@@ -590,14 +848,13 @@ func (s *Supervisor) CameraCell() (row, col int, ok bool) {
 
 // EyesClosed は camera mode 時の EAR ベース瞬き状態を返す。
 //
-// Phase 2.5: game.Update から呼ばれる lock-free observer。最新 cell snapshot がない場合は
-// false に倒し、閉じ誤判定を避ける。
+// Phase 2.7: game.Update から呼ばれる lock-free observer。BlinkFilter の現在 state が
+// BlinkClosed の場合のみ true を返す。mouse fallback 時は switchToMouseLocked / Stop で Reset する。
 func (s *Supervisor) EyesClosed() bool {
-	state := s.cellPtr.Load()
-	if state == nil {
+	if s.blinkFilter == nil {
 		return false
 	}
-	return state.eyesClosed
+	return s.blinkFilter.State() == BlinkClosed
 }
 
 // IsRunning は supervisor loop が生存中かどうかを返す (atomic.Bool.Load)。

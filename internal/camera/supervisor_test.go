@@ -192,3 +192,98 @@ func TestSupervisor_SwitchToCamera_UpdatesMode(t *testing.T) {
 		t.Errorf("Mode() after tickDetection = %d, want %d (CameraModeCamera)", got, CameraModeCamera)
 	}
 }
+
+// TestSupervisor_BlinkFilter_InitialState は supervisor 生成時に BlinkFilter が Open 初期状態であることを確認。
+func TestSupervisor_BlinkFilter_InitialState(t *testing.T) {
+	s := NewSupervisor(nil, nil, nil)
+	if s.blinkFilter == nil {
+		t.Fatal("blinkFilter = nil, want initialized")
+	}
+	if got := s.blinkFilter.State(); got != BlinkOpen {
+		t.Fatalf("blinkFilter.State() = %d, want %d (BlinkOpen)", got, BlinkOpen)
+	}
+}
+
+// TestSupervisor_BlinkFilter_Update_Transitions は tickCell が BlinkFilter.Update を使うことを確認。
+func TestSupervisor_BlinkFilter_Update_Transitions(t *testing.T) {
+	s := NewSupervisor(nil, nil, nil)
+	dr := DetectionResult{FaceDetected: true, EarLeft: 0.19, EarRight: 0.19}
+	s.tickCell(dr, true)
+	if got := s.blinkFilter.State(); got != BlinkHalf {
+		t.Fatalf("blinkFilter.State() after 0.19 = %d, want %d (BlinkHalf)", got, BlinkHalf)
+	}
+	if s.EyesClosed() {
+		t.Fatal("EyesClosed() after Half = true, want false")
+	}
+	dr.EarLeft = 0.09
+	dr.EarRight = 0.09
+	s.tickCell(dr, true)
+	if got := s.blinkFilter.State(); got != BlinkClosed {
+		t.Fatalf("blinkFilter.State() after 0.09 = %d, want %d (BlinkClosed)", got, BlinkClosed)
+	}
+	if !s.EyesClosed() {
+		t.Fatal("EyesClosed() after Closed = false, want true")
+	}
+}
+
+// TestSupervisor_BlinkFilter_Reset_OnStop は Stop 後に BlinkFilter が Open に戻ることを確認。
+func TestSupervisor_BlinkFilter_Reset_OnStop(t *testing.T) {
+	s := NewSupervisor(nil, nil, nil)
+	s.tickCell(DetectionResult{FaceDetected: true, EarLeft: 0.19, EarRight: 0.19}, true)
+	s.tickCell(DetectionResult{FaceDetected: true, EarLeft: 0.09, EarRight: 0.09}, true)
+	if got := s.blinkFilter.State(); got != BlinkClosed {
+		t.Fatalf("setup blinkFilter.State() = %d, want %d (BlinkClosed)", got, BlinkClosed)
+	}
+	if err := s.Stop(); err != nil {
+		t.Fatalf("Stop() = %v, want nil", err)
+	}
+	if got := s.blinkFilter.State(); got != BlinkOpen {
+		t.Fatalf("blinkFilter.State() after Stop = %d, want %d (BlinkOpen)", got, BlinkOpen)
+	}
+}
+
+// TestSupervisor_BlinkFilter_Reset_OnSwitchToMouse は mouse fallback 時に blink state を引き継がないことを確認。
+func TestSupervisor_BlinkFilter_Reset_OnSwitchToMouse(t *testing.T) {
+	s := NewSupervisor(nil, nil, nil)
+	s.tickCell(DetectionResult{FaceDetected: true, EarLeft: 0.19, EarRight: 0.19}, true)
+	s.tickCell(DetectionResult{FaceDetected: true, EarLeft: 0.09, EarRight: 0.09}, true)
+	s.mu.Lock()
+	s.switchToMouseLocked()
+	s.mu.Unlock()
+	if got := s.blinkFilter.State(); got != BlinkOpen {
+		t.Fatalf("blinkFilter.State() after switchToMouseLocked = %d, want %d (BlinkOpen)", got, BlinkOpen)
+	}
+}
+
+// TestSupervisor_MPServer_NotStarted_DefaultState は起動前 mp_server.py 管理状態を確認。
+func TestSupervisor_MPServer_NotStarted_DefaultState(t *testing.T) {
+	s := NewSupervisor(nil, nil, nil)
+	if s.mpServerCmd != nil {
+		t.Fatalf("mpServerCmd = %#v, want nil", s.mpServerCmd)
+	}
+	if s.mpServerEnabled {
+		t.Fatal("mpServerEnabled = true, want false")
+	}
+}
+
+// TestSupervisor_MPServer_Stop_NeverStarted_NoPanic は未起動 stopMPServer が panic しないことを確認。
+func TestSupervisor_MPServer_Stop_NeverStarted_NoPanic(t *testing.T) {
+	s := NewSupervisor(nil, nil, nil)
+	if err := s.stopMPServer(); err != nil {
+		t.Fatalf("stopMPServer() before start = %v, want nil", err)
+	}
+}
+
+// TestSupervisor_MPServer_MaxFails_SetLastError は 5回失敗後に manual restart 要求を記録することを確認。
+func TestSupervisor_MPServer_MaxFails_SetLastError(t *testing.T) {
+	s := NewSupervisor(nil, nil, nil)
+	s.mpServerEnabled = true
+	s.mpServerFails = mpServerMaxFails
+	if err := s.monitorMPServer(); err != nil {
+		t.Fatalf("monitorMPServer() = %v, want nil", err)
+	}
+	want := "mp_server.py 5回連続失敗、手動再起動必要"
+	if got := s.LastError(); got != want {
+		t.Fatalf("LastError() = %q, want %q", got, want)
+	}
+}
