@@ -73,6 +73,11 @@ type Panel struct {
 	statusMessage   string // SetStatus 経由での上書き、毎フレーム参照される
 	onSaveRequested func() error
 
+	// Phase 2.8: Camera Status 表示 + Manual Restart ボタン。
+	cameraStatusText         *widget.Text
+	cameraRestartBtn         *widget.Button
+	onCameraRestartRequested func()
+
 	// Phase 1.14.16: 起動時 ComboBox 初期選択同期用。
 	// main.go が NewPanel に渡した initialDeviceID を保持。
 	// SetDevices() の ComboBox 作成直後に selectDeviceByID() で適用。
@@ -386,6 +391,9 @@ func NewPanel(face *text.GoTextFace, state *State, audioEnabled bool, initialDev
 	root.AddChild(statusLabel)
 	p.statusLabel = statusLabel
 
+	// --- Phase 2.8: Camera Status + Manual Restart ---
+	root.AddChild(p.NewCameraSection(nil))
+
 	// --- ヒント ---
 	root.AddChild(widget.NewText(
 		widget.TextOpts.Text("F1: Toggle Panel  |  Ctrl+Shift+H: Hide All UI", facePtr, labelColorDim),
@@ -484,6 +492,56 @@ func (p *Panel) newDeviceCombo(entries []any) *widget.ListComboButton {
 	)
 }
 
+// NewCameraSection は Camera Status 表示 + Restart ボタンのミニセクションを返す。
+//
+// Phase 2.8: F1 panel の下部に追加する表示専用セクション。Restart ボタンは
+// Down 状態時のみ有効化され、押下時は onRestartRequested または setter で登録された
+// callback に処理を委譲する。
+func (p *Panel) NewCameraSection(onRestartRequested func()) *widget.Container {
+	if onRestartRequested != nil {
+		p.onCameraRestartRequested = onRestartRequested
+	}
+	faceIface := text.Face(p.face)
+	facePtr := &faceIface
+	labelColorIdle := color.NRGBA{0xcc, 0xcc, 0xcc, 0xff}
+	btnTextColor := &widget.ButtonTextColor{
+		Idle:     color.NRGBA{0xdf, 0xf4, 0xff, 0xff},
+		Disabled: color.NRGBA{0x99, 0x99, 0x99, 0xff},
+	}
+
+	p.cameraStatusText = widget.NewText(
+		widget.TextOpts.Text("Camera: Mouse", facePtr, labelColorIdle),
+		widget.TextOpts.WidgetOpts(widget.WidgetOpts.LayoutData(widget.RowLayoutData{Stretch: true})),
+	)
+	p.cameraRestartBtn = widget.NewButton(
+		widget.ButtonOpts.Image(&widget.ButtonImage{
+			Idle:    image.NewNineSliceColor(color.NRGBA{0x33, 0x3a, 0x44, 0xff}),
+			Hover:   image.NewNineSliceColor(color.NRGBA{0x44, 0x4a, 0x54, 0xff}),
+			Pressed: image.NewNineSliceColor(color.NRGBA{0x22, 0x28, 0x32, 0xff}),
+		}),
+		widget.ButtonOpts.Text("Restart Camera", facePtr, btnTextColor),
+		widget.ButtonOpts.TextPadding(&widget.Insets{Left: 12, Right: 12, Top: 5, Bottom: 5}),
+		widget.ButtonOpts.ClickedHandler(func(args *widget.ButtonClickedEventArgs) {
+			if p.onCameraRestartRequested != nil {
+				p.onCameraRestartRequested()
+			}
+		}),
+	)
+	p.cameraRestartBtn.GetWidget().Disabled = true
+
+	section := widget.NewContainer(
+		widget.ContainerOpts.Layout(widget.NewRowLayout(
+			widget.RowLayoutOpts.Direction(widget.DirectionHorizontal),
+			widget.RowLayoutOpts.Spacing(8),
+			widget.RowLayoutOpts.Padding(widget.NewInsetsSimple(4)),
+		)),
+		widget.ContainerOpts.WidgetOpts(widget.WidgetOpts.LayoutData(widget.RowLayoutData{Stretch: true})),
+	)
+	section.AddChild(p.cameraStatusText)
+	section.AddChild(p.cameraRestartBtn)
+	return section
+}
+
 // SetUIHidden は uiHidden フラグを設定する。
 // Game.Update() から Ctrl+Shift+H 検出時に呼ばれる。
 // true にすると Draw() は no-op になる (Game.Draw() 側でも
@@ -513,6 +571,13 @@ func (p *Panel) SetOnSaveRequested(fn func() error) {
 	p.onSaveRequested = fn
 }
 
+// SetOnCameraRestartRequested は Restart Camera ボタン押下時の callback を設定する。
+//
+// Phase 2.8: mp_server.py の実制御は supervisor に委譲し、Panel は要求通知だけを行う。
+func (p *Panel) SetOnCameraRestartRequested(fn func()) {
+	p.onCameraRestartRequested = fn
+}
+
 // SetStatus は statusLabel の文字列を更新する (Phase 1.14.16)。
 // 公開 setter 経由で更新することで Update() の毎フレーム再代入と競合しない。
 func (p *Panel) SetStatus(message string) {
@@ -520,6 +585,37 @@ func (p *Panel) SetStatus(message string) {
 	if p.statusLabel != nil {
 		p.statusLabel.Label = message
 	}
+}
+
+// UpdateCameraStatus は Camera Status 表示と Restart ボタン状態を更新する。
+//
+// Phase 2.8: Game.Update() から毎フレーム呼ばれる。mode は 0=Mouse / 1=Camera。
+// lastErr が nil の場合はエラーなし、非 nil の場合は mp_server.py または detection 系の
+// 異常表示に使う。TOML 永続化は行わない表示専用 state。
+func (p *Panel) UpdateCameraStatus(mode int, mpRunning bool, lastErr *string) {
+	status := "Mouse"
+	restartable := false
+
+	switch {
+	case !mpRunning && lastErr != nil:
+		status = "Down"
+		restartable = true
+	case mpRunning && lastErr != nil:
+		status = "Lost Signal"
+	case mode == 1:
+		status = "Active"
+	default:
+		status = "Mouse"
+	}
+
+	if p.cameraStatusText != nil {
+		p.cameraStatusText.Label = "Camera: " + status
+	}
+	if p.cameraRestartBtn != nil {
+		p.cameraRestartBtn.GetWidget().Disabled = !restartable
+	}
+	p.state.CameraMode = status
+	p.state.CameraRestartable = restartable
 }
 
 // statusText は statusLabel に表示する文字列を返す (Phase 1.14.16)。

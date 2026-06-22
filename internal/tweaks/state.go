@@ -31,6 +31,10 @@ type State struct {
 	AudioMouthState int
 	AudioGateOpen   bool
 
+	// Camera 状態 (Phase 2.8 で追加、表示専用、TOML 永続化なし)。
+	CameraMode        string // "Mouse" / "Active" / "Lost Signal" / "Down"
+	CameraRestartable bool   // Down 状態時のみ true、Restart ボタン有効化用
+
 	// UI 表示
 	PanelVisible bool // F1 で toggle
 
@@ -57,9 +61,11 @@ func NewState() *State {
 		BlinkEnabled:        true,
 		AudioEnabled:        true,
 		// Phase 1.14.15: 15.0x → 10.0x に下げる (詳細は PHASE1.md Section 13.7 参照)。
-		AudioSensitivity: 10.0,
-		PanelVisible:     false,
-		Dirty:            false,
+		AudioSensitivity:  10.0,
+		CameraMode:        "Mouse",
+		CameraRestartable: false,
+		PanelVisible:      false,
+		Dirty:             false,
 	}
 }
 

@@ -35,6 +35,9 @@ const (
 type SupervisorCellProvider interface {
 	CameraCell() (row, col int, ok bool)
 	EyesClosed() bool
+	MPServerRunning() bool
+	LastError() *string
+	RestartMPServer() error
 }
 
 // DeviceListMessage は起動時バックグラウンドで列挙したデバイス一覧を
@@ -235,6 +238,17 @@ func (g *Game) Update() error {
 	}
 
 	// Tweaks panel UI 更新
+	if g.panel != nil {
+		if g.supervisor != nil {
+			g.panel.UpdateCameraStatus(
+				int(g.cameraMode.Load()),
+				g.supervisor.MPServerRunning(),
+				g.supervisor.LastError(),
+			)
+		} else {
+			g.panel.UpdateCameraStatus(int(g.cameraMode.Load()), false, nil)
+		}
+	}
 	if g.tweaks.PanelVisible {
 		g.panel.Update()
 	}
@@ -398,4 +412,14 @@ func (g *Game) SetCameraMode(mode int) {
 // Phase 1 ビルドでは呼ばれず、nil のまま mouse follow が動作する。
 func (g *Game) SetSupervisor(supervisor SupervisorCellProvider) {
 	g.supervisor = supervisor
+}
+
+// RestartCamera は Tweaks panel の Manual Restart ボタンから camera supervisor へ再起動を委譲する。
+//
+// Phase 2.8: game パッケージは camera パッケージを import しないため、interface 経由で呼ぶ。
+func (g *Game) RestartCamera() error {
+	if g.supervisor == nil {
+		return nil
+	}
+	return g.supervisor.RestartMPServer()
 }

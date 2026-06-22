@@ -247,6 +247,13 @@ func main() {
 	}()
 
 	g := game.New(atlas, mouse.NewFollower(0.3), blink.New(), mover, panel, tweaksState, devicesCh)
+	panel.SetOnCameraRestartRequested(func() {
+		if err := g.RestartCamera(); err != nil {
+			log.Printf("camera: manual restart failed: %v", err)
+			return
+		}
+		log.Printf("camera: manual restart triggered")
+	})
 
 	// Phase 2.5: camera supervisor 起動 (libzmq 利用可能時のみ動作)。
 	// `//go:build camera` ガード下の init() で cameraHook が設定される。

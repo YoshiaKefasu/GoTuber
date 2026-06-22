@@ -624,6 +624,29 @@ func (s *Supervisor) StartMPServer() error {
 	return s.startMPServer()
 }
 
+// RestartMPServer は mp_server.py サブプロセスを強制再起動する。
+//
+// Phase 2.8: Tweaks panel の Manual Restart ボタンから呼ばれる公開 API。
+// Down 状態 (5回失敗到達) からの復帰、または任意タイミングの手動再起動用。
+// 成功時は新しい mp_server.py プロセスを起動し、backoff / fail count / lastError をリセットする。
+func (s *Supervisor) RestartMPServer() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.mpServerCmd != nil && s.mpServerCmd.Process != nil {
+		_ = s.mpServerCmd.Process.Kill()
+	}
+	s.mpServerCmd = nil
+	s.mpServerDone = nil
+	s.mpServerEnabled = false
+	s.mpServerRetry = true
+	s.mpServerFails = 0
+	s.mpServerBackoff = 0
+	s.clearLastErrorLocked()
+
+	return s.startMPServerLocked()
+}
+
 // startMPServer は mp_server.py サブプロセスを起動する。
 //
 // Phase 2.7: 冪等。既に起動中なら no-op。Python サイドカーの起動失敗は呼び出し側で
@@ -861,6 +884,10 @@ func (s *Supervisor) storeLastError(msg string) {
 	log.Printf("camera: supervisor error: %s", msg)
 }
 
+func (s *Supervisor) clearLastErrorLocked() {
+	s.stateObserver.lastError.Store(nil)
+}
+
 // --- 状態 observer (lock-free, 任意の goroutine から安全) ---
 
 // Mode は現在の mouse/camera mode を返す (lock-free、atomic.Int32.Load)。
@@ -908,14 +935,20 @@ func (s *Supervisor) IsRunning() bool {
 
 // LastError は supervisor 内の直近エラーメッセージを返す (lock-free)。
 //
-// エラー未発生時は空文字列。stateObserver.lastError (atomic.Pointer[string]) を
+// エラー未発生時は nil。stateObserver.lastError (atomic.Pointer[string]) を
 // 経由して取得。Tweaks パネルの status 表示 (Phase 2.8) で使う予定。
-func (s *Supervisor) LastError() string {
-	p := s.stateObserver.lastError.Load()
-	if p == nil {
-		return ""
-	}
-	return *p
+func (s *Supervisor) LastError() *string {
+	return s.stateObserver.lastError.Load()
+}
+
+// MPServerRunning は mp_server.py プロセスが現在動作中かを返す。
+//
+// Phase 2.8: Tweaks panel の Camera Status 表示用。新規 observer フィールドは増やさず、
+// supervisor が保持するプロセス状態から最小限に算出する。
+func (s *Supervisor) MPServerRunning() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.mpServerCmd != nil && s.mpServerEnabled
 }
 
 // CameraFps は CameraTracker の累計送信フレーム数を返す (debug 用)。

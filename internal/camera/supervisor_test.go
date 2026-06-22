@@ -22,7 +22,7 @@ import (
 // 起動前:
 //   - Mode() == CameraModeMouse (デフォルト)
 //   - IsRunning() == false (loop 未起動)
-//   - LastError() == "" (エラーなし)
+//   - LastError() == nil (エラーなし)
 //   - CameraFps / DetectionFps == 0 (カウント未開始)
 func TestSupervisor_DefaultState(t *testing.T) {
 	s := NewSupervisor(nil, nil, nil)
@@ -32,8 +32,8 @@ func TestSupervisor_DefaultState(t *testing.T) {
 	if s.IsRunning() {
 		t.Errorf("IsRunning() before Start = true, want false")
 	}
-	if s.LastError() != "" {
-		t.Errorf("LastError() before Start = %q, want empty", s.LastError())
+	if s.LastError() != nil {
+		t.Errorf("LastError() before Start = %q, want nil", *s.LastError())
 	}
 	if s.CameraFps() != 0 {
 		t.Errorf("CameraFps() before Start = %d, want 0", s.CameraFps())
@@ -284,7 +284,12 @@ func TestSupervisor_MPServer_MaxFails_SetLastError(t *testing.T) {
 		t.Fatalf("monitorMPServer() = %v, want nil", err)
 	}
 	want := "mp_server.py 5回連続失敗、手動再起動必要"
-	if got := s.LastError(); got != want {
+	lastErr := s.LastError()
+	if lastErr == nil || *lastErr != want {
+		got := "<nil>"
+		if lastErr != nil {
+			got = *lastErr
+		}
 		t.Fatalf("LastError() = %q, want %q", got, want)
 	}
 }
