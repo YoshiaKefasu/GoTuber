@@ -33,6 +33,7 @@
 - **自動まばたき（EAR）** — MediaPipe Face Landmarker の Eye Aspect Ratio で瞬き検出
 - **フェイルセーフ** — 顔が消えたら自動的にマウスモード（Phase 1.5）に切替
 - **Python サイドカー構成** — MediaPipe は Python プロセスで実行、GoTuber.exe は Go バイナリのみ（サイズ不変、起動失敗時は graceful degradation）
+- **配信中可用性** — MediaPipe tracker がクラッシュしてもメイン GoTuber は無影響、supervisor loop が exponential backoff (1s→30s) で自動再起動、5 回連続失敗で manual restart 待ち
 - 口の縦横比 (MAR) カメラ検出は Phase 2.5+ で再評価（Phase 1.7 の malgo マイクと排他利用）
 
 ### Phase 3（VTuber ソフト連携・未着手）
@@ -280,7 +281,7 @@ GoTuber/
 │   ├── requirements.txt     # Python 依存
 │   └── LICENSE-third-party  # 依存ライセンス一覧
 ├── docs/                    # 設計ドキュメント
-│   ├── PLAN.md              # 全体設計 (v0.4.5)
+│   ├── PLAN.md              # 全体設計 (v0.4.6)
 │   ├── PHASE1.md            # Phase 1 詳細設計
 │   ├── PHASE2.md            # Phase 2 詳細設計 (MediaPipe 確定)
 │   ├── PHASE3.md            # Phase 3 詳細設計
@@ -355,7 +356,7 @@ Phase 1.10 時点で:
 
 🔜 **次の予定**: Phase 2 (MediaPipe Face Landmarker 即採用で確定、`docs/PHASE2.md` 参照)。
 
-- プラン: [docs/PLAN.md](docs/PLAN.md) v0.4.5
+- プラン: [docs/PLAN.md](docs/PLAN.md) v0.4.6
 - Phase 1.12 詳細: [docs/PHASE1.md](docs/PHASE1.md) Section 9
 - Phase 1.13 (1.13a/1.13b) 詳細: [docs/PHASE1.md](docs/PHASE1.md) Section 10
 - Phase 1.14 詳細: [docs/PHASE1.md](docs/PHASE1.md) Section 11

@@ -1,6 +1,6 @@
 # GoTuber — 詳細プラン
 
-> **ステータス**: v0.4.5（Q1, Q3, Q4, Q12 確定、Q6 post_release 化、Q8 MediaPipe 即採用で確定）
+> **ステータス**: v0.4.6（Q1, Q3, Q4, Q12 確定、Q6 post_release 化、Q8 MediaPipe 即採用で確定、配信中可用性方針追加 (Section 1.1)）
 > **作成日**: 2026-06-15 / 改訂 2026-06-15（v0.4: レビュー反映、v0.4.3: Q 確定反映）/ 2026-06-16（v0.4.4: Q6 post_release 化）/ 2026-06-17（v0.4.5: Q8 MediaPipe 即採用で確定）
 > **ベース**: `tomari-guruguru`（React/Vite/JSX）→ **Golang 完全書き換え**（確定）
 > **ターゲット OS**: Windows / Linux / macOS
@@ -270,6 +270,8 @@ GoTuber/
 
 **Phase 2 顔検出**はメインループと別 goroutine で実行し、channel 経由で最新結果のみ反映（Phase 2.7 参照）。メインループ 16.67 ms 予算は維持される。
 
+**Phase 2 配信中可用性方針 (2026-06-22 確定)**: MediaPipe サイドカー / CameraTracker がクラッシュしてもメイン GoTuber プロセスには一切影響なし (panic recover 済み、goroutine 隔離済み)。supervisor loop が exponential backoff (1s → 30s 上限) で自動再起動、5 回連続失敗で「Camera Down — Manual Restart Required」を Tweaks に表示。tracker 再起動成功で camera モード自動復帰 (配信者の手動介入ゼロ)。詳細は [PHASE2.md Section 1.1](./PHASE2.md#11-配信中可用性方針-2026-06-22-確定) 参照。
+
 | Phase 2 追加処理 | 予算 | 備考 |
 |---|---|---|
 | camera.MPClient.Recv (goroutine) | 15〜50 ms | 非同期。最新値のみ channel に流す（block しない） |
@@ -479,7 +481,7 @@ GOTUBER_LOG_LEVEL=debug go run ./cmd/gotuber
 | # | リスク | 影響 | 対策 |
 |---|---|---|---|
 | R1 | CGo によるクロスコンパイル不可 | 中 | 各 OS で個別ビルド。CI は GitHub Actions matrix |
-| R2 | MediaPipe セットアップ摩擦（Python サイドカー） | 中 | Phase 2 開始時に README + `tools/requirements-mp.txt` 整備、起動失敗時は Phase 1 マウスモードで graceful degradation |
+| R2 | MediaPipe セットアップ摩擦（Python サイドカー） | 中 | Phase 2 開始時に README + `tools/requirements-mp.txt` 整備、起動失敗時は Phase 1 マウスモードで graceful degradation。配信中の可用性確保は supervisor loop (PHASE2.md 1.1) で担保、5 回連続失敗で manual restart 待ち |
 | R3 | 透過ウィンドウの OS 差異 | 中 | Issue #3222 回避手順を Phase 1.2 に明記。Windows は `WS_EX_TRANSPARENT` フォールバック |
 | R4 | Mic 権限の UX | 中 | OS ごとの初回ダイアログ。エラー時は audio 無効で続行 |
 | R5 | 起動時 150 枚のデコード時間 | 低 | **遅延デコード** で起動時は 1 シートのみ。目標 < 500 ms（実測） |
@@ -490,6 +492,7 @@ GOTUBER_LOG_LEVEL=debug go run ./cmd/gotuber
 | R10 | go-osc メンテナンス停止（2022-03 以降） | 中〜高 | Phase 3 開始時に分枝 or 代替検討。自前 UDP 実装（~150 行）も候補 |
 | R11 | クリックスルー有効時のロックイン | 中 | Phase 1.14 で kill switch (Esc / signal.Notify on Windows) 削除 → 対策: ウィンドウ X ボタン (全 OS graceful) + Ctrl+C (Unix: signal.Notify 経由 graceful / Windows: Go runtime デフォルト即終了) + OS タスクバー / Alt+Tab |
 | R12 | フォーカスフリッカー（クリックスルー有効化直後 200ms） | 中 | xdotool で KASOU 検証、60 フレーム遅延発火オプションで対応 |
+| R13 | Phase 2 tracker クラッシュ時の可用性 | 中 | CameraTracker の defer recover で panic 吸収、supervisor loop が exponential backoff で自動再起動 (1s → 30s 上限、3 回成功でリセット)、5 回連続失敗で Tweaks に "Camera Down — Manual Restart Required" 表示。実装: `internal/camera/supervisor.go` (Phase 2.5) |
 
 ---
 
@@ -620,4 +623,4 @@ Phase 1 を以下の順序で進める。各ステップ完了時にコミット
 
 ---
 
-*v0.4.5 改訂: Phase 2 を MediaPipe Face Landmarker 即採用で確定 (Q8 解除、Python サイドカー + ZeroMQ IPC 構成)。Phase 1 ビルドサイズ・依存不変。Q6 音声ファイル再生は post_release に分離済み (v0.4.4)。Phase 1 スコープ = マウス追従 + メインマイク Realtime 口パク + 透過 + Tweaks 永続化。kill switch = ウィンドウ閉じる X ボタン (Phase 1.14)。*
+*v0.4.6 改訂: Phase 2 配信中可用性方針追加 (Section 1.1 確定)。MediaPipe tracker クラッシュ時もメイン GoTuber 影響なし、supervisor loop が exponential backoff で自動再起動 (1s→30s、5 回連続失敗で manual restart 待ち)、R13 リスク追加。v0.4.5 Phase 2 MediaPipe 即採用、Q8 解除から継続。Phase 1 ビルドサイズ・依存不変。*
