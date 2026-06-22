@@ -39,19 +39,12 @@ import (
 // detectionTopic は ZMQ SUB subscribe filter。docs/PHASE2.md 4.3 で "detection"
 // タイプの JSON を受信する想定。
 //
-// 【重要・Phase 2.10 統合時の地雷】
-// 現状の tools/mp_server.py (Phase 2.1) は検出 JSON を wire prefix なしで publish している
-// (tools/mp_server.py:569 `pub.send_string(json.dumps(msg))`)。ZMQ SetSubscribe は wire
-// 先頭バイトでフィルタするため、prefix なし JSON (先頭 "{") は SetSubscribe("detection")
-// で弾かれて永久に届かない。
+// Phase 2.3c で確定: tools/mp_server.py は `pub.send_string(DETECTION_TOPIC + " " + json.dumps(msg))`
+// で wire prefix 付き publish する。Go 側 SetSubscribe("detection") と 1:1 で整合済み
+// (B 方針)。JSON 内の `type` フィールドは将来複数 type publish 対応の冗長防御。
 //
-// Phase 2.5+ で mp_server.py 側を `pub.send_string("detection " + json.dumps(msg))` に
-// 変更予定。Phase 2.3 は先行実装として "detection" filter を設定するが、**Phase 2.10 で
-// 統合テスト実施時に mp_server.py 側の変更 (またはこの filter の解除) が必要**。
-//
-// 暫定回避 (Phase 2.10 統合時): SetSubscribe("") (空 prefix、全受信) に変更すれば
-// 現状 mp_server.py と互換。type フィールドが JSON 内に含まれるので Latest() 受信後の
-// JSON parse 時に区別可能 (validateDetectionJSON 参照)。
+// Wire format: "detection <JSON>" (single space separator)
+// 参考: docs/PHASE2.md Section 4.3 通信プロトコル。
 const detectionTopic = "detection"
 
 // recvTimeout は ZMQ SUB RecvBytes のタイムアウト値。EAGAIN で graceful loop を継続し、
