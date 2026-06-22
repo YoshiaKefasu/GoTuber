@@ -27,10 +27,9 @@ import "math"
 // mutex は持たない。Phase 2.5 supervisor loop など 1 goroutine から呼ぶ想定で、
 // 複数 goroutine 共有が必要になった時点で呼び出し側か本型に同期を追加する。
 //
-// Phase 2.6: ヒステリシス実装、別レイヤ被せ。
+// Phase 2.6: ヒステリシス実装、別レイヤ型。
 type BlinkFilter struct {
-	state     BlinkState
-	lastInput float64
+	state BlinkState
 }
 
 const (
@@ -67,9 +66,10 @@ func NewBlinkFilter() *BlinkFilter {
 //
 // 範囲外 (< 0 || > 0.5) は BlinkOpen にフォールバックする (Phase 2.4 と同じ安全側)。
 // NaN / Inf も MediaPipe noise 由来の不正値として BlinkOpen にフォールバックする。
+// 不正値は state を無条件に BlinkOpen へリセットするため、Closed/Half 遷移中の
+// 単一ノイズフレームが意図せず瞬き判定を短縮させる可能性がある (Phase 2.4 EARToBlink と同一挙動、意図的)。
 func (f *BlinkFilter) Update(earLeft, earRight float64) BlinkState {
 	earAvg := averageEAR(earLeft, earRight)
-	f.lastInput = earAvg
 
 	if invalidEAR(earAvg) {
 		f.state = BlinkOpen
@@ -106,5 +106,4 @@ func (f *BlinkFilter) State() BlinkState {
 // Reset は BlinkFilter を BlinkOpen 初期状態にリセットする (テスト用途)。
 func (f *BlinkFilter) Reset() {
 	f.state = BlinkOpen
-	f.lastInput = 0
 }

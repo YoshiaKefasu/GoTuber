@@ -96,6 +96,81 @@ func TestBlinkFilter_FullCycle(t *testing.T) {
 	}
 }
 
+// TestBlinkFilter_BoundaryExactly は閾値ジャスト値で状態維持する strict < / > セマンティクスを確認する。
+func TestBlinkFilter_BoundaryExactly(t *testing.T) {
+	t.Run("Open_0.20_stays_Open", func(t *testing.T) {
+		filter := NewBlinkFilter()
+		// Open 初期状態から 0.20 ジャスト → 下降しきい値未到達 (strict <)、Open 維持。
+		if got := filter.Update(0.20, 0.20); got != BlinkOpen {
+			t.Fatalf("Open + 0.20 exactly = %d, want %d (BlinkOpen)", got, BlinkOpen)
+		}
+	})
+
+	t.Run("Half_0.24_stays_Half", func(t *testing.T) {
+		filter := NewBlinkFilter()
+		// Half 状態に遷移後、0.24 ジャスト → 上昇しきい値未到達 (strict >)、Half 維持。
+		filter.Update(0.19, 0.19) // Open → Half
+		if got := filter.Update(0.24, 0.24); got != BlinkHalf {
+			t.Fatalf("Half + 0.24 exactly = %d, want %d (BlinkHalf)", got, BlinkHalf)
+		}
+	})
+
+	t.Run("Half_0.10_stays_Half", func(t *testing.T) {
+		filter := NewBlinkFilter()
+		// Half 状態から 0.10 ジャスト → 下降しきい値未到達 (strict <)、Half 維持。
+		filter.Update(0.19, 0.19) // Open → Half
+		if got := filter.Update(0.10, 0.10); got != BlinkHalf {
+			t.Fatalf("Half + 0.10 exactly = %d, want %d (BlinkHalf)", got, BlinkHalf)
+		}
+	})
+
+	t.Run("Closed_0.14_stays_Closed", func(t *testing.T) {
+		filter := NewBlinkFilter()
+		// Closed 状態に遷移後、0.14 ジャスト → 上昇しきい値未到達 (strict >)、Closed 維持。
+		filter.Update(0.19, 0.19) // Open → Half
+		filter.Update(0.09, 0.09) // Half → Closed
+		if got := filter.Update(0.14, 0.14); got != BlinkClosed {
+			t.Fatalf("Closed + 0.14 exactly = %d, want %d (BlinkClosed)", got, BlinkClosed)
+		}
+	})
+
+	t.Run("Open_0.19_becomes_Half", func(t *testing.T) {
+		filter := NewBlinkFilter()
+		// 下降しきい値直下 (0.19) で Half 遷移 (境界テストの逆)。
+		if got := filter.Update(0.19, 0.19); got != BlinkHalf {
+			t.Fatalf("Open + 0.19 = %d, want %d (BlinkHalf)", got, BlinkHalf)
+		}
+	})
+
+	t.Run("Half_0.25_becomes_Open", func(t *testing.T) {
+		filter := NewBlinkFilter()
+		// 上昇しきい値直上 (0.25) で Open 遷移。
+		filter.Update(0.19, 0.19) // Open → Half
+		if got := filter.Update(0.25, 0.25); got != BlinkOpen {
+			t.Fatalf("Half + 0.25 = %d, want %d (BlinkOpen)", got, BlinkOpen)
+		}
+	})
+
+	t.Run("Half_0.09_becomes_Closed", func(t *testing.T) {
+		filter := NewBlinkFilter()
+		// 下降しきい値直下 (0.09) で Closed 遷移。
+		filter.Update(0.19, 0.19) // Open → Half
+		if got := filter.Update(0.09, 0.09); got != BlinkClosed {
+			t.Fatalf("Half + 0.09 = %d, want %d (BlinkClosed)", got, BlinkClosed)
+		}
+	})
+
+	t.Run("Closed_0.15_becomes_Half", func(t *testing.T) {
+		filter := NewBlinkFilter()
+		// 上昇しきい値直上 (0.15) で Half 遷移。
+		filter.Update(0.19, 0.19) // Open → Half
+		filter.Update(0.09, 0.09) // Half → Closed
+		if got := filter.Update(0.15, 0.15); got != BlinkHalf {
+			t.Fatalf("Closed + 0.15 = %d, want %d (BlinkHalf)", got, BlinkHalf)
+		}
+	})
+}
+
 // TestBlinkFilter_OutOfRange_Open は範囲外入力が BlinkOpen にフォールバックすることを確認する。
 func TestBlinkFilter_OutOfRange_Open(t *testing.T) {
 	cases := []struct {
