@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """mp_server.py - GoTuber Phase 2 MediaPipe Python sidecar.
 
-Spec: docs/PHASE2.md Section 4.1, 4.3, Phase 2.1.
+Spec: docs/PHASE2.md Section 4.1, 4.3, Phase 2.1 / Phase 2.3.
 
 Captures the local webcam, runs MediaPipe Face Landmarker (Tasks API)
 per frame, and publishes detection JSON (yaw/pitch/roll, EAR left/right,
-face_center_x/y) on ZeroMQ PUB port 5556. The reverse channel (ZeroMQ
-SUB on port 5555) is wired but only logged in Phase 2.1; Go-side frame
-publishing lands in Phase 2.2/2.5.
+face_center_x/y) on ZeroMQ PUB port 5556 with the topic prefix
+"detection " (Phase 2.3 wire-format alignment; matches Go-side
+SetSubscribe("detection") in internal/camera/mpclient.go). The reverse
+channel (ZeroMQ SUB on port 5555) is wired but only logged in Phase 2.1;
+Go-side frame publishing lands in Phase 2.2/2.5.
 
 YAGNI: this is the Phase 2.1 minimum. VIDEO mode, blendshape parsing,
 multi-face, frame-driven detection, and ack semantics are intentionally
@@ -44,6 +46,13 @@ MODEL_URL: Final[str] = (
     "https://storage.googleapis.com/mediapipe-models/"
     "face_landmarker/face_landmarker/float16/latest/face_landmarker.task"
 )
+
+# ZeroMQ PUB topic prefix for outbound detection messages.
+# Wire format: "detection <json>" (single space separator). Kept in sync
+# with internal/camera/mpclient.go's SetSubscribe("detection") on the Go
+# side (Phase 2.3 wire-format alignment). Without this prefix, the Go
+# topic filter rejects the message because the JSON body starts with '{'.
+DETECTION_TOPIC: Final[str] = "detection"
 
 # Landmark indices per docs/PHASE2.md Phase 2.1.
 LANDMARK_NOSE_TIP: Final[int] = 1
@@ -566,7 +575,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                 frame_shape=frame.shape, timestamp=timestamp,
             )
             try:
-                pub.send_string(json.dumps(msg))
+                # Topic-prefixed publish so the Go-side SetSubscribe("detection")
+                # topic filter accepts the message (Phase 2.3 wire-format).
+                # Wire format: "detection <json>" with a single space separator.
+                pub.send_string(DETECTION_TOPIC + " " + json.dumps(msg))
             except zmq.ZMQError as e:
                 log.error("PUB send failed: %s", e)
                 exit_code = 1  # Process supervisor (systemd / Go-side spawner) needs to know this is a fatal failure, not a clean shutdown

@@ -146,6 +146,24 @@ MediaPipe の Go バインディング (mediapipe-go) は experimental で Windo
 }
 ```
 
+#### Wire Format (Phase 2.3d 確定)
+
+| 方向 | wire 形式 | Phase |
+|---|---|---|
+| CameraTracker → mp_server.py (PUB 5555) | `<base64-JSON frame>` (prefix なし) | Phase 2.2 実装済 |
+| mp_server.py → MPClient (PUB 5556) | `detection <detection JSON>` (prefix 付き) | Phase 2.3c 実装済 |
+
+#### Topic Filter 一覧 (Phase 2.3d)
+
+| 方向 | filter | Phase | 状態 |
+|---|---|---|---|
+| MPClient (SUB 5556) | `detection` | Phase 2.3b 先行実装 | ✅ コード反映済 |
+| mp_server.py (SUB 5555) | `""` (全受信) | Phase 2.1 | ✅ 現状 |
+| CameraTracker (PUB 5555) topic prefix 付与 | - | Phase 2.5+ | ⏸ 持ち越し |
+| mp_server.py (PUB 5556) topic prefix 付与 | `"detection "` | Phase 2.3c | ✅ 確定 |
+
+注: Phase 2.3c で mp_server.py 側に `DETECTION_TOPIC` 定数 + prefix 付き publish 実装済み、Phase 2.3b の mpclient.go と整合済み。Phase 2.5+ で frame topic prefix (Go 側 CameraTracker) 対応予定。
+
 ### 4.4 必要な Python 依存
 
 **venv でカスタム環境を作成する** (Phase 2 で初めて Python 依存を導入するユーザー向けに推奨、YAGNI ではないが配布時の Python バージョン衝突を防ぐ):

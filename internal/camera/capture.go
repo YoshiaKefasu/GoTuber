@@ -44,12 +44,21 @@ import (
 	"github.com/pebbe/zmq4"
 )
 
-// frameTopic は JSON `type` フィールドの値。Phase 2.2 では wire 上に prefix を
-// 付けず JSON 内のみで識別する。
+// frameTopic は ZeroMQ PUB-SUB topic prefix 識別子。
+// 現状 (Phase 2.3d): frame publish は prefix なし (Phase 2.2 実装、Phase 2.5+ で "frame " prefix 化予定)。
+// Phase 2.3c で mp_server.py 側の detection topic prefix ("detection ") は確定済み、Go 側 mpclient.go (Phase 2.3b) と整合済み。
+// 詳細: docs/PHASE2.md Section 4.3 通信プロトコル
 //
-// TODO(Phase 2.5+): 複数 subscriber 対応時は wire prefix "frame " を Send 先頭に
-// 付与し、mp_server.py で `setsockopt(zmq.SUBSCRIBE, "frame")` を使うと topic
-// フィルタが効く。
+// 現状 (Phase 2.3d 確定):
+//   - mp_server.py (Phase 2.3c) は検出 publish 時に `"detection " + JSON` の形式で送信する。
+//   - mpclient.go (Phase 2.3b) は `SetSubscribe("detection")` でフィルタ受信する。
+//   - frame topic prefix (Go 側 publish) は Phase 2.5+ で対応予定 (現状は未着手で OK)。
+//
+// Phase 2.3c で mp_server.py 側 detection topic prefix 対応確定、Phase 2.5+ で frame topic prefix 化予定 (Go 側 CameraTracker):
+//   - SendBytes 先頭に `frameTopic + " "` を付与:
+//     pub.SendBytes([]byte(frameTopic+" "+string(payload)), 0)
+//   - mp_server.py 側で `setsockopt(zmq.SUBSCRIBE, b"frame")` を設定
+//   - これにより "frame" prefix のみ受信、複数 subscriber 対応
 const frameTopic = "frame"
 
 // CameraTracker は webcam capture → ZeroMQ publish の非同期ループを司る。
