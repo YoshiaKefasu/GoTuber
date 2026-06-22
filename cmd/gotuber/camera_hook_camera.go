@@ -95,12 +95,14 @@ func init() {
 			mpclient.Close()
 			return
 		}
+		g.SetSupervisor(supervisor)
 
 		// 60Hz で supervisor.Mode() → game.SetCameraMode() 反映 goroutine。
 		// 終了時 (ctx.Done): mouse mode (0) に戻して game に通知。
 		go func() {
 			ticker := time.NewTicker(cameraModeUpdateInterval)
 			defer ticker.Stop()
+			defer supervisor.Stop()
 			for {
 				select {
 				case <-ctx.Done():

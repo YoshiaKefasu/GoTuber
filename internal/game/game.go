@@ -22,7 +22,20 @@ const (
 	windowTitle         = "GoTuber"
 	initialWindowWidth  = 1280
 	initialWindowHeight = 720
+
+	// Phase 2.5: camera パッケージとの循環 import / build tag 依存を避ける内部 mode 値。
+	cameraModeMouse  int32 = 0
+	cameraModeCamera int32 = 1
 )
+
+// SupervisorCellProvider は camera mode 時の 5x5 atlas cell と瞬き状態を提供する。
+//
+// Phase 2.5: game パッケージから camera パッケージを import しないための最小 interface。
+// `internal/camera/supervisor.go` の *Supervisor がこの interface を満たす。
+type SupervisorCellProvider interface {
+	CameraCell() (row, col int, ok bool)
+	EyesClosed() bool
+}
 
 // DeviceListMessage は起動時バックグラウンドで列挙したデバイス一覧を
 // メインスレッド (Game.Update) に通知するためのチャネルメッセージ (Phase 1.13a S-1)。
@@ -77,6 +90,10 @@ type Game struct {
 	// Camera ビルド: camera_hook_camera.go の init() で起動された supervisor loop が
 	//               60Hz ごとに SetCameraMode(int(supervisor.Mode())) で更新。
 	cameraMode atomic.Int32
+
+	// Phase 2.5: camera mode 時に supervisor から cell / blink を読む。
+	// nil のときは mouse follow にフォールバックし、Phase 1 動作を維持する。
+	supervisor SupervisorCellProvider
 }
 
 // New は新しい Game を作成する。
@@ -170,7 +187,11 @@ func (g *Game) Update() error {
 	g.mouse.Update(mx, my, g.width, g.height, g.tweaks.MouseResponsiveness)
 
 	// 自動まばたき
-	if g.tweaks.BlinkEnabled {
+	// Phase 2.5: camera mode では supervisor の EAR 判定を優先し、mouse mode は
+	// Phase 1.6 の blink scheduler を完全維持する。supervisor 未設定時は従来どおり。
+	if g.cameraMode.Load() == cameraModeCamera && g.supervisor != nil {
+		g.eyesClosed = g.supervisor.EyesClosed()
+	} else if g.tweaks.BlinkEnabled {
 		g.eyesClosed = g.blink.Update(time.Now())
 	} else {
 		g.eyesClosed = false
@@ -233,7 +254,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		return
 	}
 
-	row, col := g.mouse.Cell()
+	row, col := g.currentCell()
 	sheetIdx := g.sheetForState()
 	img, ok := g.atlas.Get(sheetIdx, row, col)
 	if !ok || img == nil {
@@ -264,6 +285,21 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	if !g.uiHidden && g.tweaks.PanelVisible {
 		g.panel.Draw(screen)
 	}
+}
+
+// currentCell は現在の camera mode に応じた atlas cell を返す。
+//
+// Phase 2.5: camera mode かつ supervisor が有効な場合だけ camera cell を使う。
+// supervisor が未起動 / 顔未検出 / 最新 cell なしの場合は Phase 1.12 の mouse.Cell() に
+// フォールバックし、既存 mouse follow ロジックを変更しない。
+func (g *Game) currentCell() (row, col int) {
+	if g.cameraMode.Load() == cameraModeCamera && g.supervisor != nil {
+		row, col, ok := g.supervisor.CameraCell()
+		if ok {
+			return row, col
+		}
+	}
+	return g.mouse.Cell()
 }
 
 // sheetForState は現在の (eyesState, mouthState) に対応する sheet index を返す。
@@ -344,4 +380,12 @@ func (g *Game) ToggleUIHidden() {
 //	からのみ呼ばれるので Phase 1 動作には影響しない。
 func (g *Game) SetCameraMode(mode int) {
 	g.cameraMode.Store(int32(mode))
+}
+
+// SetSupervisor は camera mode 用の cell provider を設定する (Phase 2.5)。
+//
+// camera_hook_camera.go (`//go:build camera`) から *camera.Supervisor を渡す。
+// Phase 1 ビルドでは呼ばれず、nil のまま mouse follow が動作する。
+func (g *Game) SetSupervisor(supervisor SupervisorCellProvider) {
+	g.supervisor = supervisor
 }

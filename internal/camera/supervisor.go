@@ -129,6 +129,18 @@ type Supervisor struct {
 
 	// 観測 (atomic observer、Phase 1.14 規約)
 	stateObserver *supervisorState
+	cellPtr       atomic.Pointer[cellState]
+}
+
+// cellState は camera mode 時に game loop から読む atlas cell snapshot。
+//
+// Phase 2.5: supervisor loop が 60Hz で mpclient.Latest() を mapper に通し、
+// atomic.Pointer で最新値を公開する。game.Draw / Update は mutex なしで読む。
+type cellState struct {
+	row        int
+	col        int
+	eyesClosed bool
+	ok         bool
 }
 
 // supervisorState は L3 supervisor の状態観測 (atomic、外部公開用)。
@@ -316,8 +328,14 @@ func (s *Supervisor) supervisorLoop(ctx context.Context) {
 		case <-ticker.C:
 		}
 
-		// 1. Latest detection 取得 + faceDetected 判定
-		s.tickDetection()
+		// 1. Latest detection 取得 + faceDetected 判定 + camera cell snapshot 更新
+		var dr DetectionResult
+		var ok bool
+		if s.mpclient != nil {
+			dr, _, ok = s.mpclient.Latest()
+		}
+		s.tickDetectionSnapshot(dr, ok)
+		s.tickCell(dr, ok)
 
 		// 2. L1/L2 生存監視 + 再起動 (exponential backoff)
 		if s.tracker != nil {
@@ -348,15 +366,18 @@ func (s *Supervisor) supervisorLoop(ctx context.Context) {
 // mutex 保護下で lastDetected / faceDetected / mode を更新し、
 // supervisorState.mode (atomic) も同期する。
 func (s *Supervisor) tickDetection() {
+	var dr DetectionResult
+	var ok bool
+	if s.mpclient != nil {
+		dr, _, ok = s.mpclient.Latest()
+	}
+	s.tickDetectionSnapshot(dr, ok)
+}
+
+func (s *Supervisor) tickDetectionSnapshot(dr DetectionResult, ok bool) {
 	nowUnix := float64(time.Now().UnixNano()) / 1e9
 
-	var detected bool
-	if s.mpclient != nil {
-		dr, _, ok := s.mpclient.Latest()
-		if ok && dr.FaceDetected {
-			detected = true
-		}
-	}
+	detected := ok && dr.FaceDetected
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -381,6 +402,23 @@ func (s *Supervisor) tickDetection() {
 	case !s.faceDetected && s.mode == CameraModeCamera:
 		s.switchToMouseLocked()
 	}
+}
+
+// tickCell は最新 detection から camera mode 用の atlas cell と瞬き状態を計算する。
+//
+// Phase 2.5: mpclient.Latest() の結果を mapper.go の純粋関数に通し、atomic snapshot として
+// game パッケージに公開する。顔未検出 / 最新値なしの場合は ok=false を保存し、game 側は
+// mouse.Cell() にフォールバックする。
+func (s *Supervisor) tickCell(dr DetectionResult, ok bool) {
+	if !ok || !dr.FaceDetected {
+		s.cellPtr.Store(&cellState{ok: false})
+		return
+	}
+
+	row := PitchToRow(dr.Pitch)
+	col := YawToCol(dr.Yaw)
+	eyesClosed := EARToBlink(dr.EarLeft, dr.EarRight) == BlinkClosed
+	s.cellPtr.Store(&cellState{row: row, col: col, eyesClosed: eyesClosed, ok: true})
 }
 
 // switchToCameraLocked は mouse mode → camera mode 切替 (mu 保護下前提)。
@@ -536,23 +574,24 @@ func (s *Supervisor) Mode() CameraMode {
 // (呼び出し側で mode を確認すべきだが、安全のため center fallback)。
 //
 // game.go の Update から呼ばれる。lock-free (mutex 不使用)。
-func (s *Supervisor) CameraCell() (row, col int) {
-	if s.mpclient == nil {
-		return 2, 2
+func (s *Supervisor) CameraCell() (row, col int, ok bool) {
+	state := s.cellPtr.Load()
+	if state == nil || !state.ok {
+		return 2, 2, false
 	}
-	dr, _, ok := s.mpclient.Latest()
-	if !ok || !dr.FaceDetected {
-		return 2, 2
+	return state.row, state.col, true
+}
+
+// EyesClosed は camera mode 時の EAR ベース瞬き状態を返す。
+//
+// Phase 2.5: game.Update から呼ばれる lock-free observer。最新 cell snapshot がない場合は
+// false に倒し、閉じ誤判定を避ける。
+func (s *Supervisor) EyesClosed() bool {
+	state := s.cellPtr.Load()
+	if state == nil {
+		return false
 	}
-	// 1秒タイムアウト再判定 (faceDetected 保護)
-	s.mu.Lock()
-	lastDetected := s.lastDetected
-	s.mu.Unlock()
-	nowUnix := float64(time.Now().UnixNano()) / 1e9
-	if lastDetected <= 0 || nowUnix-lastDetected >= faceDetectionTimeoutSec {
-		return 2, 2
-	}
-	return PitchToRow(dr.Pitch), YawToCol(dr.Yaw)
+	return state.eyesClosed
 }
 
 // IsRunning は supervisor loop が生存中かどうかを返す (atomic.Bool.Load)。

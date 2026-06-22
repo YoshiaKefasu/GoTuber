@@ -258,8 +258,11 @@ func main() {
 	// カメラ固有コードは camera_hook_camera.go (`//go:build camera`) に分離。
 	// Go の build tag はファイル単位なので、main.go 内に直接 build tag 下の関数を
 	// 呼ぶコードは書けない (Phase 1 ビルドで未定義シンボルエラーになる)。
-	ctx := context.Background()
-	runCameraHook(ctx, g)
+	// Phase 2.5: camera hook 専用 context。RunGame 終了時に cancel し、
+	// supervisor / tracker / mpclient goroutine を graceful shutdown させる。
+	cameraCtx, cameraCancel := context.WithCancel(context.Background())
+	defer cameraCancel()
+	runCameraHook(cameraCtx, g)
 
 	// ゲームループ
 	// ebiten.Termination は kill switch 発火時の正常終了として扱う（終了コード 0）
