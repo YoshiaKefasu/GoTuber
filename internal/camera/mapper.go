@@ -40,8 +40,14 @@ const (
 
 // 閾値定数 (Phase 2.4: 5x5 atlas セル算出用)。
 //
-// mouse.Follower.Update (Phase 1.5) で使われている閾値と同じ値を採用済み。
-// 将来 mouse と camera を排他的に切替える supervisor (Phase 2.5) でこの値を共有する。
+// EAR は tools/mp_server.py の _compute_ear() が返す素の値 (典型域 ~0.05–0.35)。
+// 0.22 / 0.10 は MediaPipe 出力の実測分布に基づく Phase 2.4 独自閾値で、
+// Python 側に同値定数はない (Go 側のみで適用)。Phase 2.6 でヒステリシスを
+// 別レイヤで被せる想定 (現状は単純な 2 段しきい値)。
+//
+// yaw/pitch 範囲 (±30°/±20°) は画面前で使う現実的な head pose 範囲。
+// profile view (>±30°) では mapper が clamp で最大セルを返すため、
+// camera follow モードでは mouse follow fallback を促す意図。
 const (
 	yawMinDeg   = -30.0
 	yawMaxDeg   = +30.0
@@ -116,6 +122,8 @@ func PitchToRow(pitchDeg float64) int {
 // Phase 2.4: 純粋関数・副作用なし。
 func EARToBlink(earLeft, earRight float64) BlinkState {
 	earAvg := (earLeft + earRight) / 2.0
+	// 不正値 (負値 / 0.5 超) は MediaPipe noise 由来 → 開眼側へフェイルセーフ
+	// (閉じ誤判定は開誤判定より目立つため)。
 	if earAvg < 0 || earAvg > 0.5 {
 		return BlinkOpen
 	}
