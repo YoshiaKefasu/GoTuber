@@ -235,6 +235,12 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	ox := (float64(g.width) - scaledW) / 2
 	oy := (float64(g.height) - scaledH) / 2
 	op := &ebiten.DrawImageOptions{}
+	// FilterLinear: スケール時のジャギーを防ぐ (Ebitengine デフォルトの FilterNearest だと
+	// 1200x1200 スプライトを 720x720 (1280x720 ウィンドウ中央に letterbox) に縮小した時に
+	// エッジがギザギザになる)。縮小方向は Linear で十分、拡大方向は Pixel-art なら Nearest の
+	// ほうが好ましいが現実装は 5x5 cell (各 1200x1200) を画面サイズに縮小する用途が主なので
+	// Linear で統一。
+	op.Filter = ebiten.FilterLinear
 	op.GeoM.Scale(scale, scale)
 	op.GeoM.Translate(ox, oy)
 	screen.DrawImage(img, op)
