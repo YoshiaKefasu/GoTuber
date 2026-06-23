@@ -399,6 +399,7 @@ YAML 読み込み後、**フェイルファスト** で以下を検証：
 | 1.13a | マイク選択 + TOML 永続化 | 4-5 日 | 🔜 予定 (Phase 1.13b 後) |
 | 1.13b | UI 非表示ショートカット (`Ctrl+Shift+H`) | 1 日 | 🔜 予定 (1.13a の前) |
 | 2 | Camera 入力 | 2〜3 週 | **確定 (2026-06-17) / 2026-06-23 改訂**: MediaPipe Face Landmarker 即採用 (Python サイドカー + localhost TCP JSONL)。Phase 1 ビルドサイズ不変 |
+| 2.10.2 | Python sidecar 完全自動化 | 0.5〜1 日 | 🔜 予定: `.venv-mp` 自動作成 / 自動依存導入 / 自動起動 |
 | 3 | VMC Protocol 出力 | 1〜2 週 | 未着手 |
 
 各フェーズのゴール・実装項目・DoD・工数等の詳細は対応するファイル参照。
@@ -494,6 +495,7 @@ GOTUBER_LOG_LEVEL=debug go run ./cmd/gotuber
 | R4 | Mic 権限の UX | 中 | OS ごとの初回ダイアログ。エラー時は audio 無効で続行 |
 | R5 | 起動時 150 枚のデコード時間 | 低 | **遅延デコード** で起動時は 1 シートのみ。目標 < 500 ms（実測） |
 | R6 | Python サイドカー依存追加 | 低 | GoTuber.exe は Go バイナリのみで変化なし、Phase 2 利用時に mediapipe/opencv-python/numpy が必要 (~145MB) |
+| R6.1 | Python 依存インストール時の高 CPU / 長待ち | 中 | Windows 実機で `Preparing metadata (pyproject.toml)` 中に CPU 99% を確認。**対策**: Phase 2.10.2 で `tools/setup-mp.{ps1,sh}` を導入し、`pip/wheel/setuptools` 先行更新・`--prefer-binary`・必要なら `--no-build-isolation` を固定してビルド負荷を緩和する |
 | R7 | VMC Protocol 仕様の網羅性 | 中 | Phase 3 は最小実装（blend shapes のみ） |
 | R8 | Ebitengine の将来の破壊的変更 | 低 | v2.9.9 stable に固定、v3 alpha は本番採用しない |
 | R9 | アセット権利問題 | 中 | 元画像は同梱しない。`tools/slice_character_sheets.py` 同梱で自前生成運用 |

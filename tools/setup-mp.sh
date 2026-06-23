@@ -85,11 +85,11 @@ echo -e "${CYAN}=== Phase 2 MediaPipe environment setup (Unix) ===${NC}"
 echo -e "${YELLOW}--- Creating venv: $VENV_DIR (using $PYTHON_BIN) ---${NC}"
 "$PYTHON_BIN" -m venv "$VENV_DIR"
 
-echo -e "${YELLOW}--- Upgrading pip ---${NC}"
-"$VENV_DIR/bin/pip" install --upgrade pip
+echo -e "${YELLOW}--- Upgrading pip / wheel / setuptools ---${NC}"
+"$VENV_DIR/bin/pip" install --upgrade pip wheel setuptools
 
-echo -e "${YELLOW}--- Installing requirements from tools/requirements-mp.txt ---${NC}"
-"$VENV_DIR/bin/pip" install -r "$REQUIREMENTS"
+echo -e "${YELLOW}--- Installing requirements from tools/requirements-mp.txt (prefer-binary) ---${NC}"
+"$VENV_DIR/bin/pip" install --prefer-binary -r "$REQUIREMENTS"
 
 echo -e "${YELLOW}--- Bundled MediaPipe model ---${NC}"
 ls -lh "$MODEL_PATH"

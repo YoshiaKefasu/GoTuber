@@ -113,6 +113,7 @@
 - Phase 2.10 で `blackjack/webcam` / ZeroMQ 依存を除去済み
 - Go 側 camera 通信は localhost TCP JSONL
 - Python sidecar 実行時は `tools/requirements-mp.txt` の依存が必要
+- 次段階 (Phase 2.10.2) で `.venv-mp` 自動作成 / 自動依存導入 / 自動起動を追加予定
 
 #### WSL Ubuntu / Linux
 ```bash

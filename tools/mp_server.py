@@ -196,10 +196,16 @@ def _create_landmarker(model_path: Path, log: logging.Logger) -> Any:
     IMAGE mode is the simplest for capture-rate loop. Phase 2.5+ may switch
     to VIDEO mode for timestamp-aware smoothing once the Go-side clock owns
     frame pacing.
+
+    Phase 2.10.3: mediapipe 0.10.14+ では mediapipe.tasks.__init__.py が
+    mediapipe/tasks/python/__init__.py を指すため、mediapipe.tasks は
+    まさに python サブパッケージそのもの。
+    つまり mp.tasks.python.BaseOptions は python.python.BaseOptions となり
+    AttributeError になる。正しくは mp.tasks.BaseOptions。
     """
     import mediapipe as mp  # lazy: keep --help stdlib-only
 
-    base_options = mp.tasks.python.BaseOptions(model_asset_path=str(model_path))
+    base_options = mp.tasks.BaseOptions(model_asset_path=str(model_path))
     options = mp.tasks.vision.FaceLandmarkerOptions(
         base_options=base_options,
         running_mode=mp.tasks.vision.RunningMode.IMAGE,
@@ -381,6 +387,12 @@ def build_detection_message(
         }
 
     yaw, pitch, roll = _compute_head_pose(landmarks_px, frame_shape)
+
+    # Phase 2.10.4: OpenCV camera frame (Y-down) では
+    # 下を向く = pitch positive, 上を向く = pitch negative。
+    # Go mapper (PitchToRow) は +20° = 上 (row 0) 前提のため符号を反転する。
+    pitch = -pitch
+
     ear_left = _compute_ear(landmarks_px, eye="left")
     ear_right = _compute_ear(landmarks_px, eye="right")
     cx, cy = _compute_face_center(landmarks_px, w, h)
@@ -484,12 +496,32 @@ def main(argv: Optional[list[str]] = None) -> int:
 
         cap = cv2.VideoCapture(args.camera_id)
         if not cap.isOpened():
-            log.error("Cannot open camera id=%d", args.camera_id)
+            log.error("Cannot open camera id=%d (isOpened returned False)", args.camera_id)
             return 1
-        # frame.shape を使う (cap.get() の返す値と実フレームが異なる USB カメラがあるため)。
-        # 1 フレームだけ読み捨てで shape 確定してもよいが、初回 read まで width/height は確定しない。
-        # 代わりに毎フレーム frame.shape[1] / frame.shape[0] を真実とする (Phase 2.1 review Significant-2)。
-        log.info("Camera %d opened", args.camera_id)
+
+        # Phase 2.10.4: カメラを高解像度で取得するよう request する。
+        # request が通らない場合でも、実フレーム shape を真実とする。
+        # 640x480 は小さすぎるため、1280x720 を request (.Full HD は不安定なドライバがある)。
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+
+        # Phase 2.10.3: isOpened() だけでは不十分 (USB カメラで handle は
+        # 開いても実フレームが来ないケースがある)。最初の 1 フレームを
+        # 実読込みして、本当にカメラ映像が取れるか確認する。
+        ok, first_frame = cap.read()
+        if not ok or first_frame is None:
+            log.error(
+                "Camera id=%d: opened but first frame read failed (ok=%s, frame=%s). "
+                "Camera may be in use by another application.",
+                args.camera_id, ok, type(first_frame),
+            )
+            cap.release()
+            return 1
+        h, w = first_frame.shape[:2]
+        log.info(
+            "Camera %d opened and first frame acquired (%dx%d)",
+            args.camera_id, w, h,
+        )
 
         detector = _create_landmarker(model_path, log)
 

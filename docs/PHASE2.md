@@ -395,6 +395,42 @@ Phase 2.10 ではこれを次のように解消した:
 - [ ] Windows 実機で `bin/gotuber-camera.exe` を起動し、Tweaks panel に Camera セクションが表示
 - [ ] Windows 実機で `mp_server.py` が webcam capture + MediaPipe 推論を実行
 
+### Phase 2.10.2: Python sidecar 完全自動化 (2026-06-23, 🔜 次)
+
+> **背景**: Windows 実機テストで `cv2` 未導入時は `mp_server.py` が即死し、
+> 手動で `python -m venv .venv-mp` → `pip install -r tools/requirements-mp.txt` が必要だった。
+> さらに `pip install` 中に `Preparing metadata (pyproject.toml)` が長引くケースで CPU 使用率が極端に上がる事実を確認。
+
+#### 目標
+
+- `.venv-mp` が無ければ **自動作成**
+- 依存が無ければ **自動インストール**
+- `gotuber-camera.exe` 起動時に **`.venv-mp\Scripts\python.exe` を最優先で使う**
+- `Preparing metadata (pyproject.toml)` の重さを緩和するため、**setup script 側で pip 実行オプションを固定**
+- ユーザーが PowerShell で長い手動セットアップを打たなくて済む状態にする
+
+#### 実装項目
+
+| 項目 | ファイル | 説明 |
+|---|---|---|
+| Windows 自動セットアップ | `tools/setup-mp.ps1` | `.venv-mp` 自動作成、pip upgrade、requirements install、`--force` で再作成対応 |
+| Linux/WSL 自動セットアップ | `tools/setup-mp.sh` | `.venv-mp` 自動作成、requirements install |
+| Python 自動検知 | `internal/camera/supervisor.go` | `pythonExecutable()` で `.venv-mp\Scripts\python.exe`（Windows）/ `.venv-mp/bin/python`（Unix）を最優先探索 |
+| 自動 bootstrap | `internal/camera/supervisor.go` | venv 未作成時は setup script を 1 回だけ起動し、その後に mp_server.py 再起動を試みる |
+| 重い metadata 対策 | `tools/setup-mp.ps1`, `tools/setup-mp.sh` | `pip install --upgrade pip wheel setuptools` を先行、必要なら `--prefer-binary` / `--no-build-isolation` を固定してビルド負荷を抑える |
+| UX 明確化 | `README.md`, `docs/PLAN.md` | 自動作成・自動起動の挙動、再作成方法、失敗時の見え方を追記 |
+
+補足: `pythonExecutable()` はまず `.venv-mp` の実ファイルパスを直接確認し、それが無い時だけ `exec.LookPath()` へフォールバックする。
+
+#### 完了条件
+
+- [ ] `.venv-mp` が無い Windows 環境で `bin/gotuber-camera.exe` 起動 → venv 自動作成開始
+- [ ] 依存導入後、同じ起動フローの中で `mp_server.py` が自動起動する
+- [ ] `pythonExecutable()` が PATH の `python.exe` より `.venv-mp` を優先する
+- [ ] `Preparing metadata (pyproject.toml)` の長時間待ちが setup script 側で緩和される
+- [ ] 既に `.venv-mp` がある場合は再インストールせず即起動する
+- [ ] `--force` 相当の再構築手段が用意される
+
 ---
 
 ## 6. 完了基準 (DoD)

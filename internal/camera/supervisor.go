@@ -41,6 +41,7 @@
 package camera
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -150,14 +151,24 @@ type Supervisor struct {
 	// Phase 2.6: EAR ヒステリシスフィルタ (Phase 2.7 で supervisor 統合)。
 	blinkFilter *BlinkFilter
 
+	// Phase 2.10.4: yaw/pitch smoothing (EMA)。
+	// raw 値をそのまま 5x5 セルに通すと微小ノイズでセルが飛び痙攣するため、
+	// 指数移動平均 (Exponential Moving Average) で低速追従させる。
+	// α = 0.25 (前回値 75% + 新規値 25%) で 60Hz 換算 ~0.3 秒の時定数。
+	smoothedYaw   float64
+	smoothedPitch float64
+	smoothingInit bool // 最初の 1 フレームは raw 値をそのまま代入 (EMA 初期化)
+
 	// Phase 2.7: mp_server.py サブプロセス管理。
-	mpServerCmd     *exec.Cmd
-	mpServerPath    string
-	mpServerDone    chan error
-	mpServerEnabled atomic.Bool
-	mpServerRetry   bool
-	mpServerFails   int
-	mpServerBackoff time.Duration
+	mpServerCmd        *exec.Cmd
+	mpServerPath       string
+	mpServerDone       chan error
+	mpServerEnabled    atomic.Bool
+	mpServerRetry      bool
+	mpServerFails      int
+	mpServerBackoff    time.Duration
+	mpServerStableTicks int // 起動後連続 stable tick 数 (fail count リセット用)
+	mpSetupRan          bool // Phase 2.10.2: setup script を 1 回だけ実行するガード
 
 	// 観測 (atomic observer、Phase 1.14 規約)
 	stateObserver *supervisorState
@@ -455,14 +466,33 @@ func (s *Supervisor) tickDetectionSnapshot(dr DetectionResult, ok bool) {
 // Phase 2.5: mpclient.Latest() の結果を mapper.go の純粋関数に通し、atomic snapshot として
 // game パッケージに公開する。顔未検出 / 最新値なしの場合は ok=false を保存し、game 側は
 // mouse.Cell() にフォールバックする。
+//
+// Phase 2.10.4: raw yaw/pitch に EMA smoothing を適用してから mapper に渡す。
+// α = 0.25 (前回値 75% + 新規値 25%) で 60Hz 換算 ~0.3 秒の時定数。
 func (s *Supervisor) tickCell(dr DetectionResult, ok bool) {
 	if !ok || !dr.FaceDetected {
 		s.cellPtr.Store(&cellState{ok: false})
 		return
 	}
 
-	row := PitchToRow(dr.Pitch)
-	col := YawToCol(dr.Yaw)
+	const smoothingAlpha = 0.25
+
+	yaw := dr.Yaw
+	pitch := dr.Pitch
+
+	// Phase 2.10.4: EMA smoothing。
+	// 最初の 1 フレームは raw 値をそのまま代入して初期化。
+	if !s.smoothingInit {
+		s.smoothedYaw = yaw
+		s.smoothedPitch = pitch
+		s.smoothingInit = true
+	} else {
+		s.smoothedYaw = s.smoothedYaw*(1-smoothingAlpha) + yaw*smoothingAlpha
+		s.smoothedPitch = s.smoothedPitch*(1-smoothingAlpha) + pitch*smoothingAlpha
+	}
+
+	row := PitchToRow(s.smoothedPitch)
+	col := YawToCol(s.smoothedYaw)
 	if s.blinkFilter == nil {
 		s.blinkFilter = NewBlinkFilter()
 	}
@@ -490,6 +520,9 @@ func (s *Supervisor) switchToMouseLocked() {
 	if s.blinkFilter != nil {
 		s.blinkFilter.Reset()
 	}
+	// Phase 2.10.4: camera → mouse 切替時に smoothing 状態をリセット。
+	// 次回 camera 復帰時に stale な smoothed 値を引き継がないため。
+	s.smoothingInit = false
 	log.Printf("camera: supervisor: mode → Mouse (face lost or timeout)")
 }
 
@@ -631,7 +664,15 @@ func (s *Supervisor) RestartMPServer() error {
 //
 // Phase 2.7: 冪等。既に起動中なら no-op。Python サイドカーの起動失敗は呼び出し側で
 // graceful degradation し、mouse mode で配信継続する。
+//
+// Phase 2.10.3: ensureVenvAndDeps() は mutex 外で実行。
+// 初回セットアップ時の pip install (2-5 分) が Stop() の mutex 取得を妨げないようにする。
 func (s *Supervisor) startMPServer() error {
+	// Phase 2.10.3: setup 実行は mutex 外。blocking しても graceful shutdown を遅延させない。
+	if err := s.ensureVenvAndDeps(); err != nil {
+		log.Printf("camera: supervisor: auto-setup skipped: %v", err)
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.mpServerRetry = true
@@ -666,9 +707,36 @@ func (s *Supervisor) startMPServerLocked() error {
 		ctx = context.Background()
 	}
 	cmd := exec.CommandContext(ctx, pythonExe, mpServerPath)
+
+	// Phase 2.10.1: mp_server.py の stdout/stderr を Go ログに流す。
+	// Python 側の import error / camera open failure / クラッシュ原因が
+	// PowerShell で直接読めるようにする。
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("mp_server.py stdout pipe: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("mp_server.py stderr pipe: %w", err)
+	}
+
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("mp_server.py start failed: %w", err)
 	}
+
+	// stdout/stderr を prefix 付きで Go ログに転送 (goroutine)
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			log.Printf("camera: mp_server.py: %s", scanner.Text())
+		}
+	}()
+	go func() {
+		scanner := bufio.NewScanner(stderr)
+		for scanner.Scan() {
+			log.Printf("camera: mp_server.py [stderr]: %s", scanner.Text())
+		}
+	}()
 
 	done := make(chan error, 1)
 	s.wg.Add(1)
@@ -681,8 +749,10 @@ func (s *Supervisor) startMPServerLocked() error {
 	s.mpServerPath = mpServerPath
 	s.mpServerDone = done
 	s.mpServerEnabled.Store(true)
-	s.mpServerFails = 0
-	s.mpServerBackoff = 0
+	// Phase 2.10.1: fail count / backoff はリセットしない。
+	// monitorMPServer() 内で安定稼働 (successCount) でリセットする。
+	// 連続即死時に fail count が 1 に戻るバグを防止。
+	s.mpServerStableTicks = 0
 	log.Printf("camera: supervisor: mp_server.py started (pid=%d, path=%s)", cmd.Process.Pid, mpServerPath)
 	return nil
 }
@@ -700,6 +770,7 @@ func (s *Supervisor) stopMPServer() error {
 	s.mpServerEnabled.Store(false)
 	s.mpServerRetry = false
 	s.mpServerFails = 0
+	s.mpServerStableTicks = 0
 	s.mu.Unlock()
 
 	if cmd == nil || cmd.Process == nil {
@@ -738,6 +809,10 @@ func (s *Supervisor) stopMPServer() error {
 //
 // Phase 2.7: supervisorLoop から 60Hz で呼ぶ。実 subprocess の起動失敗や終了は
 // GoTuber 本体に伝播させず、5回連続失敗で manual restart 要求を lastError に残す。
+//
+// Phase 2.10.1: fail count リセットは「起動成功」ではなく「安定稼働」時のみ。
+// mpServerStableTicks で連続生存 tick 数をカウントし、5秒 (300 ticks) 稼働後に
+// fail count / backoff をリセットする。連続即死時に fail count が 1 に戻るバグを防止。
 func (s *Supervisor) monitorMPServer() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -757,12 +832,22 @@ func (s *Supervisor) monitorMPServer() error {
 			s.mpServerDone = nil
 			s.mpServerEnabled.Store(false)
 			s.mpServerFails++
+			s.mpServerStableTicks = 0
 			s.mpServerBackoff = nextMPServerBackoff(s.mpServerFails)
 			if err != nil {
 				s.setLastErrorLocked("mp_server.py exited: " + err.Error())
 			}
 			log.Printf("camera: supervisor: mp_server.py exited (fail count %d, backoff %v)", s.mpServerFails, s.mpServerBackoff)
 		default:
+			// Phase 2.10.1: 安定稼働カウント (60Hz = 300 ticks で 5 秒)。
+			// mp_server.py が落ちずに生存中なら tick を増やし、
+			// 安定期間到達時に fail count / backoff をリセットする。
+			s.mpServerStableTicks++
+			if s.mpServerStableTicks >= 300 && s.mpServerFails > 0 {
+				log.Printf("camera: supervisor: mp_server.py stable for 5s (fail count %d → 0)", s.mpServerFails)
+				s.mpServerFails = 0
+				s.mpServerBackoff = 0
+			}
 			return nil
 		}
 	}
@@ -812,17 +897,92 @@ func (s *Supervisor) resolveMPServerPath() (string, error) {
 }
 
 func pythonExecutable() (string, error) {
-	candidates := []string{"python3", "python"}
-	if runtime.GOOS == "windows" {
-		candidates = []string{"python.exe", "python3.exe", "python"}
+	// Phase 2.10.2: .venv-mp 内の Python を最優先。
+	// gotuber-camera.exe からの自動起動時、ユーザーが手動で venv を作っていなくても
+	// ensureVenvAndDeps() で自動作成される前提。
+	wd, _ := os.Getwd()
+	if wd == "" {
+		wd, _ = filepath.Abs(".")
 	}
-	for _, candidate := range candidates {
+	venvCandidates := []string{}
+	if runtime.GOOS == "windows" {
+		venvCandidates = []string{filepath.Join(wd, ".venv-mp", "Scripts", "python.exe")}
+	} else {
+		venvCandidates = []string{filepath.Join(wd, ".venv-mp", "bin", "python")}
+	}
+	for _, venvPython := range venvCandidates {
+		if _, err := os.Stat(venvPython); err == nil {
+			return venvPython, nil
+		}
+	}
+
+	// fallback: PATH 上の python
+	pathCandidates := []string{"python3", "python"}
+	if runtime.GOOS == "windows" {
+		pathCandidates = []string{"python.exe", "python3.exe", "python"}
+	}
+	for _, candidate := range pathCandidates {
 		path, err := exec.LookPath(candidate)
 		if err == nil {
 			return path, nil
 		}
 	}
-	return "", errors.New("python executable not found")
+	return "", errors.New("python executable not found (install Python 3.9+ or run tools/setup-mp.ps1)")
+}
+
+// ensureVenvAndDeps は .venv-mp が無ければ setup script を自動実行する。
+//
+// Phase 2.10.2: gotuber-camera.exe 起動時に venv / 依存が未セットアップでも
+// 自動で前に進むためのフック。mpSetupRan ガードで 1 回きり実行 (無限ループ防止)。
+func (s *Supervisor) ensureVenvAndDeps() error {
+	if s.mpSetupRan {
+		return nil
+	}
+	s.mpSetupRan = true
+
+	// 既に venv python が存在するなら setup 不要
+	if _, err := pythonExecutable(); err == nil {
+		wd, _ := os.Getwd()
+		venvPython := filepath.Join(wd, ".venv-mp", "Scripts", "python.exe")
+		if runtime.GOOS != "windows" {
+			venvPython = filepath.Join(wd, ".venv-mp", "bin", "python")
+		}
+		if _, err := os.Stat(venvPython); err == nil {
+			return nil // venv python が存在 → setup 不要
+		}
+	}
+
+	// setup script を探す
+	wd, _ := os.Getwd()
+	var setupScript string
+	if runtime.GOOS == "windows" {
+		setupScript = filepath.Join(wd, "tools", "setup-mp.ps1")
+	} else {
+		setupScript = filepath.Join(wd, "tools", "setup-mp.sh")
+	}
+	if _, err := os.Stat(setupScript); err != nil {
+		return fmt.Errorf("setup script not found: %s (run manually: tools/setup-mp.ps1)", setupScript)
+	}
+
+	log.Printf("camera: supervisor: .venv-mp が見つかりません。自動セットアップを開始します (初回のみ) ...")
+
+	// setup script を実行
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		// PowerShell で実行
+		cmd = exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", setupScript)
+	} else {
+		cmd = exec.Command("bash", setupScript)
+	}
+	cmd.Dir = wd
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("auto-setup failed: %w (run tools/setup-mp.ps1 manually)", err)
+	}
+
+	log.Printf("camera: supervisor: 自動セットアップ完了")
+	return nil
 }
 
 func nextMPServerBackoff(failCount int) time.Duration {

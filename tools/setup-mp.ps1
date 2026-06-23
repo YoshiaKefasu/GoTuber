@@ -8,6 +8,9 @@
 #   - Python 3.9+ (mediapipe 0.10.x 要件)
 #     Install: winget install Python.Python.3.12
 #
+# Phase 2.10.2: gotuber-camera.exe からの自動呼び出しにも対応。
+# -Force 以外は冪等 (既存 venv があればスキップ)。
+#
 # 詳細: docs/PHASE2.md Section 4.4
 
 [CmdletBinding()]
@@ -80,14 +83,17 @@ try {
 
     $pip = Join-Path $venvDir "Scripts\pip.exe"
 
-    Write-Host "--- Upgrading pip ---" -ForegroundColor Yellow
-    & $pip install --upgrade pip
+    # Phase 2.10.2: pip/wheel/setuptools を事前アップグレード。
+    # 'Preparing metadata (pyproject.toml)' の CPU 99% を軽減するため
+    # --prefer-binary を使用し、ビルド済み wheel を優先する。
+    Write-Host "--- Upgrading pip / wheel / setuptools ---" -ForegroundColor Yellow
+    & $pip install --upgrade pip wheel setuptools
     if ($LASTEXITCODE -ne 0) {
         throw "pip upgrade failed"
     }
 
-    Write-Host "--- Installing requirements from $requirements ---" -ForegroundColor Yellow
-    & $pip install -r $requirements
+    Write-Host "--- Installing requirements from $requirements (prefer-binary) ---" -ForegroundColor Yellow
+    & $pip install --prefer-binary -r $requirements
     if ($LASTEXITCODE -ne 0) {
         throw "pip install failed"
     }
