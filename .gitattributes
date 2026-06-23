@@ -25,6 +25,7 @@
 *.ico binary
 *.ttf binary
 *.otf binary
+*.task binary
 *.exe binary
 *.dll binary
 *.dylib binary

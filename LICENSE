@@ -34,6 +34,8 @@ This project uses the following open-source libraries. See
 - pelletier/go-toml v2 — MIT (https://github.com/pelletier/go-toml)
 - Phase 2+ (MediaPipe + Python サイドカー、Phase 1 では未使用):
   - mediapipe 0.10.14+ — Apache-2.0 (https://developers.google.com/mediapipe)
+  - MediaPipe Face Landmarker model (.task) — Apache-2.0
+    (assets/models/face_landmarker.task bundled binary)
   - opencv-python 4.10.0+ — Apache-2.0 (mediapipe の transitive dependency)
   - pebbe/zmq4 — MIT (https://github.com/pebbe/zmq4)
   - pyzmq 26.0+ — BSD-3-Clause (https://github.com/zeromq/pyzmq)

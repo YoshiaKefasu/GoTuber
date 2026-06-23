@@ -46,6 +46,9 @@ MODEL_URL: Final[str] = (
     "https://storage.googleapis.com/mediapipe-models/"
     "face_landmarker/face_landmarker/float16/latest/face_landmarker.task"
 )
+# NOTE: resolve()-based path works for script execution but NOT for
+# PyInstaller --onefile bundles. If packaging is needed later, fallback
+# to sys._MEIPASS or require --model-path as an explicit CLI argument.
 DEFAULT_MODEL_PATH: Final[Path] = (
     Path(__file__).resolve().parent.parent / "assets" / "models" / "face_landmarker.task"
 )

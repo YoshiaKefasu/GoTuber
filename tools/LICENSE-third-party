@@ -77,6 +77,13 @@ GoTuber は以下のオープンソースソフトウェアを利用していま
 - **Authors**: yamatoiizuka
 - **Note**: Inter (Inter Font License) + Noto Sans JP (SIL OFL) の合成フォント
 
+### MediaPipe Face Landmarker Model — `assets/models/face_landmarker.task`
+- **License**: Apache License 2.0
+- **URL**: https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task
+- **Authors**: Google / MediaPipe team
+- **Note**: Bundled model file (~3.6 MB). Source: MediaPipe official distribution.
+- **Filename**: assets/models/face_landmarker.task (3,758,596 bytes)
+
 ---
 
 ## Development Tools (Python)
