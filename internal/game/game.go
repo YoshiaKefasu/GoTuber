@@ -22,10 +22,21 @@ const (
 	windowTitle         = "GoTuber"
 	initialWindowWidth  = 1280
 	initialWindowHeight = 720
+)
 
-	// Phase 2.5: camera パッケージとの循環 import / build tag 依存を避ける内部 mode 値。
-	cameraModeMouse  int32 = 0
-	cameraModeCamera int32 = 1
+// CameraMode は game 内部で扱う camera mode 値。
+//
+// Phase 2.8.1: UI 側の magic number を避けるため exported 化する。
+type CameraMode int32
+
+// Phase 2.5: camera パッケージとの循環 import / build tag 依存を避ける mode 値。
+const (
+	CameraModeMouse  CameraMode = 0
+	CameraModeCamera CameraMode = 1
+
+	// 内部互換 alias。既存 game ロジックの呼び出し箇所はそのまま維持する。
+	cameraModeMouse  int32 = int32(CameraModeMouse)
+	cameraModeCamera int32 = int32(CameraModeCamera)
 )
 
 // SupervisorCellProvider は camera mode 時の 5x5 atlas cell と瞬き状態を提供する。

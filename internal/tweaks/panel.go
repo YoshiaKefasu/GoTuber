@@ -30,6 +30,10 @@ const (
 	sensitivitySliderMax = 200 // 20.0x
 )
 
+// Phase 2.8.1: game.CameraModeCamera と同じ値。
+// tweaks は game から import されるため、panel.go から game を import すると循環する。
+const panelCameraModeCamera = 1
+
 // clampInt は v を [lo, hi] にクランプする。
 func clampInt(v, lo, hi int) int {
 	if v < lo {
@@ -602,7 +606,7 @@ func (p *Panel) UpdateCameraStatus(mode int, mpRunning bool, lastErr *string) {
 		restartable = true
 	case mpRunning && lastErr != nil:
 		status = "Lost Signal"
-	case mode == 1:
+	case mode == panelCameraModeCamera:
 		status = "Active"
 	default:
 		status = "Mouse"

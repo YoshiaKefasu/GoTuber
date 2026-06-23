@@ -146,7 +146,7 @@ type Supervisor struct {
 	mpServerCmd     *exec.Cmd
 	mpServerPath    string
 	mpServerDone    chan error
-	mpServerEnabled bool
+	mpServerEnabled atomic.Bool
 	mpServerRetry   bool
 	mpServerFails   int
 	mpServerBackoff time.Duration
@@ -646,7 +646,7 @@ func (s *Supervisor) RestartMPServer() error {
 	}
 	s.mpServerCmd = nil
 	s.mpServerDone = nil
-	s.mpServerEnabled = false
+	s.mpServerEnabled.Store(false)
 	s.mpServerRetry = true
 
 	if err := s.startMPServerLocked(); err != nil {
@@ -678,7 +678,7 @@ func (s *Supervisor) startMPServerLocked() error {
 			return nil
 		}
 	}
-	if s.mpServerEnabled && s.mpServerCmd != nil {
+	if s.mpServerEnabled.Load() && s.mpServerCmd != nil {
 		return nil
 	}
 
@@ -710,7 +710,7 @@ func (s *Supervisor) startMPServerLocked() error {
 	s.mpServerCmd = cmd
 	s.mpServerPath = mpServerPath
 	s.mpServerDone = done
-	s.mpServerEnabled = true
+	s.mpServerEnabled.Store(true)
 	s.mpServerFails = 0
 	s.mpServerBackoff = 0
 	log.Printf("camera: supervisor: mp_server.py started (pid=%d, path=%s)", cmd.Process.Pid, mpServerPath)
@@ -727,7 +727,7 @@ func (s *Supervisor) stopMPServer() error {
 	done := s.mpServerDone
 	s.mpServerCmd = nil
 	s.mpServerDone = nil
-	s.mpServerEnabled = false
+	s.mpServerEnabled.Store(false)
 	s.mpServerRetry = false
 	s.mpServerFails = 0
 	s.mu.Unlock()
@@ -785,7 +785,7 @@ func (s *Supervisor) monitorMPServer() error {
 		case err := <-s.mpServerDone:
 			s.mpServerCmd = nil
 			s.mpServerDone = nil
-			s.mpServerEnabled = false
+			s.mpServerEnabled.Store(false)
 			s.mpServerFails++
 			s.mpServerBackoff = nextMPServerBackoff(s.mpServerFails)
 			if err != nil {
@@ -956,9 +956,7 @@ func (s *Supervisor) LastError() *string {
 // Phase 2.8: Tweaks panel の Camera Status 表示用。新規 observer フィールドは増やさず、
 // supervisor が保持するプロセス状態から最小限に算出する。
 func (s *Supervisor) MPServerRunning() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.mpServerCmd != nil && s.mpServerEnabled
+	return s.mpServerEnabled.Load()
 }
 
 // CameraFps は CameraTracker の累計送信フレーム数を返す (debug 用)。

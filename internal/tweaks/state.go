@@ -32,6 +32,7 @@ type State struct {
 	AudioGateOpen   bool
 
 	// Camera 状態 (Phase 2.8 で追加、表示専用、TOML 永続化なし)。
+	// ResetToDefaults の対象外 (Supervisor API から毎フレーム更新される runtime 表示専用 state)。
 	CameraMode        string // "Mouse" / "Active" / "Lost Signal" / "Down"
 	CameraRestartable bool   // Down 状態時のみ true、Restart ボタン有効化用
 
@@ -74,6 +75,7 @@ func NewState() *State {
 // 注意: このメソッドは Phase 1.14.16 Round 2 まで Reset ボタンから呼ばれていたが、
 // Round 3 で Reset ボタン自体が YAGNI 削除されたため、現バージョンでは呼ばれない。
 // 後方互換性のためメソッド自体は残しておく (将来別 Phase で必要になる可能性)。
+// CameraMode / CameraRestartable は runtime 表示専用なので変更しない。
 func (s *State) ResetToDefaults() {
 	s.MouseResponsiveness = 0.3
 	s.BlinkEnabled = true

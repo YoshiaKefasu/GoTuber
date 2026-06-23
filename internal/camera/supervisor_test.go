@@ -13,6 +13,7 @@
 package camera
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -261,7 +262,7 @@ func TestSupervisor_MPServer_NotStarted_DefaultState(t *testing.T) {
 	if s.mpServerCmd != nil {
 		t.Fatalf("mpServerCmd = %#v, want nil", s.mpServerCmd)
 	}
-	if s.mpServerEnabled {
+	if s.mpServerEnabled.Load() {
 		t.Fatal("mpServerEnabled = true, want false")
 	}
 }
@@ -278,7 +279,7 @@ func TestSupervisor_MPServer_Stop_NeverStarted_NoPanic(t *testing.T) {
 func TestSupervisor_MPServer_MaxFails_SetLastError(t *testing.T) {
 	s := NewSupervisor(nil, nil, nil)
 	s.mpServerRetry = true
-	s.mpServerEnabled = true
+	s.mpServerEnabled.Store(true)
 	s.mpServerFails = mpServerMaxFails
 	if err := s.monitorMPServer(); err != nil {
 		t.Fatalf("monitorMPServer() = %v, want nil", err)
@@ -291,5 +292,43 @@ func TestSupervisor_MPServer_MaxFails_SetLastError(t *testing.T) {
 			got = *lastErr
 		}
 		t.Fatalf("LastError() = %q, want %q", got, want)
+	}
+}
+
+// TestSupervisor_RestartMPServer_PreservesLastErrorOnFailure は Restart 失敗時に lastErr を残すことを検証する。
+//
+// Phase 2.8.1: clearLastErrorLocked が startMPServerLocked より前に動く regression を検出する。
+func TestSupervisor_RestartMPServer_PreservesLastErrorOnFailure(t *testing.T) {
+	s := NewSupervisor(nil, nil, nil)
+	s.mpServerRetry = true
+	// NUL を含むパスは exec.Command.Start が失敗するため、実 Python / ZMQ 環境に依存しない。
+	s.mpServerPath = "bad\x00mp_server.py"
+
+	err := s.RestartMPServer()
+	if err == nil {
+		t.Fatal("RestartMPServer should fail with invalid mp_server.py path")
+	}
+	lastErr := s.LastError()
+	if lastErr == nil {
+		t.Fatal("LastError() should preserve failure reason after failed restart")
+	}
+	if !strings.Contains(*lastErr, "manual restart failed") {
+		t.Fatalf("LastError should contain 'manual restart failed', got: %v", *lastErr)
+	}
+}
+
+// TestSupervisor_MPServerRunning_DefaultFalse は新規 Supervisor で mp_server.py が動作していないことを検証する。
+func TestSupervisor_MPServerRunning_DefaultFalse(t *testing.T) {
+	s := NewSupervisor(nil, nil, nil)
+	if s.MPServerRunning() {
+		t.Fatal("NewSupervisor should not have running mp_server.py")
+	}
+}
+
+// TestSupervisor_LastError_AtomicNilByDefault は新規 Supervisor で LastError() が nil を返すことを検証する。
+func TestSupervisor_LastError_AtomicNilByDefault(t *testing.T) {
+	s := NewSupervisor(nil, nil, nil)
+	if s.LastError() != nil {
+		t.Fatalf("NewSupervisor LastError() should be nil, got: %v", s.LastError())
 	}
 }
