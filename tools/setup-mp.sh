@@ -56,9 +56,16 @@ fi
 
 VENV_DIR="$ROOT_DIR/.venv-mp"
 REQUIREMENTS="$ROOT_DIR/tools/requirements-mp.txt"
+MODEL_PATH="$ROOT_DIR/assets/models/face_landmarker.task"
 
 if [ ! -f "$REQUIREMENTS" ]; then
     echo -e "${RED}ERROR: $REQUIREMENTS が見つかりません。${NC}" >&2
+    exit 1
+fi
+
+if [ ! -f "$MODEL_PATH" ]; then
+    echo -e "${RED}ERROR: 同梱モデル $MODEL_PATH が見つかりません。${NC}" >&2
+    echo -e "${RED}  リポジトリを取り直すか、docs/PHASE2.md Section 2.9 を確認してください。${NC}" >&2
     exit 1
 fi
 
@@ -83,6 +90,9 @@ echo -e "${YELLOW}--- Upgrading pip ---${NC}"
 
 echo -e "${YELLOW}--- Installing requirements from tools/requirements-mp.txt ---${NC}"
 "$VENV_DIR/bin/pip" install -r "$REQUIREMENTS"
+
+echo -e "${YELLOW}--- Bundled MediaPipe model ---${NC}"
+ls -lh "$MODEL_PATH"
 
 echo ""
 echo -e "${GREEN}Phase 2 MediaPipe 環境セットアップ完了。Activate: source .venv-mp/bin/activate${NC}"

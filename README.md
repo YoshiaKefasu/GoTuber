@@ -33,6 +33,7 @@
 - **自動まばたき（EAR）** — MediaPipe Face Landmarker の Eye Aspect Ratio で瞬き検出
 - **フェイルセーフ** — 顔が消えたら自動的にマウスモード（Phase 1.5）に切替
 - **Python サイドカー構成** — MediaPipe は Python プロセスで実行、GoTuber.exe は Go バイナリのみ（サイズ不変、起動失敗時は graceful degradation）
+- **MediaPipe モデル同梱** — `assets/models/face_landmarker.task` を同梱（Google / MediaPipe、Apache-2.0）。通常起動時の自動ダウンロード不要
 - **配信中可用性** — MediaPipe tracker がクラッシュしてもメイン GoTuber は無影響、supervisor loop が exponential backoff (1s→30s) で自動再起動、5 回連続失敗で manual restart 待ち
 - 口の縦横比 (MAR) カメラ検出は Phase 2.5+ で再評価（Phase 1.7 の malgo マイクと排他利用）
 
@@ -90,6 +91,7 @@
   - Windows: `scoop install mingw` または MSVC Build Tools
   - WSL: `sudo apt install gcc libasound2-dev build-essential`
 - Phase 2 以降: MediaPipe Face Landmarker (Python サイドカー) + ZeroMQ IPC (Go 側 `pebbe/zmq4`)
+  - Face Landmarker モデルは `assets/models/face_landmarker.task` に同梱済み（約 3.6 MB、Apache-2.0）
 - Python 3（スライス生成時のみ、純粋な標準ライブラリのみ使用、ffmpeg/ffprobe が必要）— `pip install -r tools/requirements.txt`
 
 ### ビルド

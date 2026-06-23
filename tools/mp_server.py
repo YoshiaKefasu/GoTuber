@@ -46,6 +46,9 @@ MODEL_URL: Final[str] = (
     "https://storage.googleapis.com/mediapipe-models/"
     "face_landmarker/face_landmarker/float16/latest/face_landmarker.task"
 )
+DEFAULT_MODEL_PATH: Final[Path] = (
+    Path(__file__).resolve().parent.parent / "assets" / "models" / "face_landmarker.task"
+)
 
 # ZeroMQ PUB topic prefix for outbound detection messages.
 # Wire format: "detection <json>" (single space separator). Kept in sync
@@ -120,12 +123,18 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         help="OpenCV camera index passed to cv2.VideoCapture().",
     )
     parser.add_argument(
-        "--model-path", type=str, default="assets/models/face_landmarker.task",
-        help="Path to face_landmarker.task (auto-downloaded if missing).",
+        "--model-path", type=Path, default=DEFAULT_MODEL_PATH,
+        help=(
+            "Path to bundled face_landmarker.task "
+            f"(default: {DEFAULT_MODEL_PATH})."
+        ),
     )
     parser.add_argument(
         "--no-auto-download", action="store_true",
-        help="Disable auto-download of face_landmarker.task (debug only).",
+        help=(
+            "Disable fallback auto-download when the bundled "
+            "face_landmarker.task is unavailable."
+        ),
     )
     parser.add_argument(
         "--debug", action="store_true",
@@ -141,14 +150,17 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
 def _ensure_model(
     model_path: Path, allow_download: bool, log: logging.Logger,
 ) -> Path:
-    """Return existing model_path or download from MODEL_URL. Spec: PHASE2.md 2.1.
+    """Return bundled model_path or fallback-download from MODEL_URL.
+
+    Phase 2.9: assets/models/face_landmarker.task is bundled, so the normal
+    path is network-free. --no-auto-download only affects the fallback path.
 
     Raises FileNotFoundError if missing and downloads disabled; RuntimeError
     if the download fails or yields a suspiciously small payload.
     """
     if model_path.is_file():
-        log.debug(
-            "Using existing model at %s (%d bytes)",
+        log.info(
+            "Using bundled MediaPipe model at %s (%d bytes)",
             model_path, model_path.stat().st_size,
         )
         return model_path
@@ -158,7 +170,11 @@ def _ensure_model(
             "Model not found at %s and auto-download disabled "
             "(--no-auto-download).", model_path,
         )
-        raise FileNotFoundError(f"face_landmarker.task missing at {model_path}")
+        raise FileNotFoundError(
+            "face_landmarker.task missing at "
+            f"{model_path}. Place the bundled model there or omit "
+            "--no-auto-download to allow fallback download."
+        )
 
     model_path.parent.mkdir(parents=True, exist_ok=True)
     log.info("Downloading face_landmarker.task from %s ...", MODEL_URL)

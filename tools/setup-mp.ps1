@@ -51,9 +51,14 @@ try {
 
     $venvDir = Join-Path $RootDir ".venv-mp"
     $requirements = Join-Path $RootDir "tools\requirements-mp.txt"
+    $modelPath = Join-Path $RootDir "assets\models\face_landmarker.task"
 
     if (-not (Test-Path $requirements)) {
         throw "$requirements が見つかりません。"
+    }
+
+    if (-not (Test-Path $modelPath)) {
+        throw "同梱モデル $modelPath が見つかりません。リポジトリを取り直すか、docs/PHASE2.md Section 2.9 を確認してください。"
     }
 
     if ($Force -and (Test-Path $venvDir)) {
@@ -86,6 +91,10 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "pip install failed"
     }
+
+    $model = Get-Item -LiteralPath $modelPath
+    Write-Host "--- Bundled MediaPipe model ---" -ForegroundColor Yellow
+    Write-Host ("{0} ({1} bytes)" -f $model.FullName, $model.Length)
 
     Write-Host ""
     Write-Host "Phase 2 MediaPipe 環境セットアップ完了。Activate: .venv-mp\Scripts\Activate.ps1" -ForegroundColor Green
