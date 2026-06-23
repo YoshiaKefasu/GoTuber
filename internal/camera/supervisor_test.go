@@ -4,12 +4,14 @@
 //
 // テスト方針 (Phase 1.14 規約):
 //   - stdlib のみ使用 (libzmq 不要、テスト実行可能)
-//   - tracker / mpclient = nil でも supervisor の lifecycle 管理は動作する設計を検証
+//   - mpclient = nil でも supervisor の lifecycle 管理は動作する設計を検証
 //   - private メソッド (tickDetection / switchToCameraLocked) は同一パッケージ内なので直接呼べる
 //   - supervisor loop の 60Hz tick は短い Sleep で代用 (CI 高速化)
 //
 // 注: これらのテストは -tags camera でのみ実行される (libzmq 不在環境では go test ./...
 // がスキップされる、Phase 1 テストには影響しない)。
+//
+// Phase 2.10: tracker パラメータ削除に合わせて NewSupervisor 呼び出しを 2 引数化。
 package camera
 
 import (
@@ -24,9 +26,9 @@ import (
 //   - Mode() == CameraModeMouse (デフォルト)
 //   - IsRunning() == false (loop 未起動)
 //   - LastError() == nil (エラーなし)
-//   - CameraFps / DetectionFps == 0 (カウント未開始)
+//   - DetectionFps == 0 (カウント未開始)
 func TestSupervisor_DefaultState(t *testing.T) {
-	s := NewSupervisor(nil, nil, nil)
+	s := NewSupervisor(nil, nil)
 	if got := s.Mode(); got != CameraModeMouse {
 		t.Errorf("Mode() before Start = %d, want %d (CameraModeMouse)", got, CameraModeMouse)
 	}
@@ -35,9 +37,6 @@ func TestSupervisor_DefaultState(t *testing.T) {
 	}
 	if s.LastError() != nil {
 		t.Errorf("LastError() before Start = %q, want nil", *s.LastError())
-	}
-	if s.CameraFps() != 0 {
-		t.Errorf("CameraFps() before Start = %d, want 0", s.CameraFps())
 	}
 	if s.DetectionFps() != 0 {
 		t.Errorf("DetectionFps() before Start = %d, want 0", s.DetectionFps())
@@ -49,7 +48,7 @@ func TestSupervisor_DefaultState(t *testing.T) {
 // Phase 1 ビルドやカメラ無効時に安全側 (= mouse follow) に倒れる設計の検証。
 // stateObserver.mode (atomic) と Supervisor.mode (mu 保護下の内部状態) の両方を確認。
 func TestSupervisor_NewSupervisor_DefaultMode(t *testing.T) {
-	s := NewSupervisor(nil, nil, nil)
+	s := NewSupervisor(nil, nil)
 	if got := s.Mode(); got != CameraModeMouse {
 		t.Errorf("NewSupervisor default Mode() = %d, want %d", got, CameraModeMouse)
 	}
@@ -63,7 +62,7 @@ func TestSupervisor_NewSupervisor_DefaultMode(t *testing.T) {
 // TestSupervisor_Stop_NeverStarted_NoPanic は未起動の supervisor に対する Stop が panic なしで
 // 動作することを確認 (冪等性 + nil 安全性)。
 func TestSupervisor_Stop_NeverStarted_NoPanic(t *testing.T) {
-	s := NewSupervisor(nil, nil, nil)
+	s := NewSupervisor(nil, nil)
 	// Never started, but Stop should not panic
 	if err := s.Stop(); err != nil {
 		t.Errorf("Stop() before Start = %v, want nil", err)
@@ -86,7 +85,7 @@ func TestSupervisor_Stop_NeverStarted_NoPanic(t *testing.T) {
 //   - Stop() 成功、IsRunning() == false
 //   - tracker=nil, mpclient=nil でも OK (YAGNI 設計)
 func TestSupervisor_StartStop_Lifecycle(t *testing.T) {
-	s := NewSupervisor(nil, nil, nil)
+	s := NewSupervisor(nil, nil)
 	if err := s.Start(nil); err != nil {
 		t.Fatalf("Start() = %v, want nil", err)
 	}
@@ -110,7 +109,7 @@ func TestSupervisor_StartStop_Lifecycle(t *testing.T) {
 //
 // 並行 Start や Start → Stop → Start のサイクルで問題が出ないことの確認。
 func TestSupervisor_Start_Idempotent(t *testing.T) {
-	s := NewSupervisor(nil, nil, nil)
+	s := NewSupervisor(nil, nil)
 	if err := s.Start(nil); err != nil {
 		t.Fatalf("first Start() = %v, want nil", err)
 	}
@@ -134,7 +133,7 @@ func TestSupervisor_Start_Idempotent(t *testing.T) {
 // 観測できることを検証。これは game.Update の hot path で mutex なしで mode を
 // 読む設計の正当性確認。
 func TestSupervisor_ModeAtomicObserver(t *testing.T) {
-	s := NewSupervisor(nil, nil, nil)
+	s := NewSupervisor(nil, nil)
 
 	// Mouse mode (default)
 	if got := s.Mode(); got != CameraModeMouse {
@@ -161,7 +160,7 @@ func TestSupervisor_ModeAtomicObserver(t *testing.T) {
 // faceDetected = true + lastDetected = now を強制することで switchToCameraLocked が
 // 呼ばれ、Supervisor.mode と stateObserver.mode (Mode()) の両方が更新される。
 func TestSupervisor_SwitchToCamera_UpdatesMode(t *testing.T) {
-	s := NewSupervisor(nil, nil, nil)
+	s := NewSupervisor(nil, nil)
 	// 起動しない (supervisor loop と race させない)
 
 	// 初期状態確認
@@ -196,7 +195,7 @@ func TestSupervisor_SwitchToCamera_UpdatesMode(t *testing.T) {
 
 // TestSupervisor_BlinkFilter_InitialState は supervisor 生成時に BlinkFilter が Open 初期状態であることを確認。
 func TestSupervisor_BlinkFilter_InitialState(t *testing.T) {
-	s := NewSupervisor(nil, nil, nil)
+	s := NewSupervisor(nil, nil)
 	if s.blinkFilter == nil {
 		t.Fatal("blinkFilter = nil, want initialized")
 	}
@@ -207,7 +206,7 @@ func TestSupervisor_BlinkFilter_InitialState(t *testing.T) {
 
 // TestSupervisor_BlinkFilter_Update_Transitions は tickCell が BlinkFilter.Update を使うことを確認。
 func TestSupervisor_BlinkFilter_Update_Transitions(t *testing.T) {
-	s := NewSupervisor(nil, nil, nil)
+	s := NewSupervisor(nil, nil)
 	dr := DetectionResult{FaceDetected: true, EarLeft: 0.19, EarRight: 0.19}
 	s.tickCell(dr, true)
 	if got := s.blinkFilter.State(); got != BlinkHalf {
@@ -229,7 +228,7 @@ func TestSupervisor_BlinkFilter_Update_Transitions(t *testing.T) {
 
 // TestSupervisor_BlinkFilter_Reset_OnStop は Stop 後に BlinkFilter が Open に戻ることを確認。
 func TestSupervisor_BlinkFilter_Reset_OnStop(t *testing.T) {
-	s := NewSupervisor(nil, nil, nil)
+	s := NewSupervisor(nil, nil)
 	s.tickCell(DetectionResult{FaceDetected: true, EarLeft: 0.19, EarRight: 0.19}, true)
 	s.tickCell(DetectionResult{FaceDetected: true, EarLeft: 0.09, EarRight: 0.09}, true)
 	if got := s.blinkFilter.State(); got != BlinkClosed {
@@ -245,7 +244,7 @@ func TestSupervisor_BlinkFilter_Reset_OnStop(t *testing.T) {
 
 // TestSupervisor_BlinkFilter_Reset_OnSwitchToMouse は mouse fallback 時に blink state を引き継がないことを確認。
 func TestSupervisor_BlinkFilter_Reset_OnSwitchToMouse(t *testing.T) {
-	s := NewSupervisor(nil, nil, nil)
+	s := NewSupervisor(nil, nil)
 	s.tickCell(DetectionResult{FaceDetected: true, EarLeft: 0.19, EarRight: 0.19}, true)
 	s.tickCell(DetectionResult{FaceDetected: true, EarLeft: 0.09, EarRight: 0.09}, true)
 	s.mu.Lock()
@@ -258,7 +257,7 @@ func TestSupervisor_BlinkFilter_Reset_OnSwitchToMouse(t *testing.T) {
 
 // TestSupervisor_MPServer_NotStarted_DefaultState は起動前 mp_server.py 管理状態を確認。
 func TestSupervisor_MPServer_NotStarted_DefaultState(t *testing.T) {
-	s := NewSupervisor(nil, nil, nil)
+	s := NewSupervisor(nil, nil)
 	if s.mpServerCmd != nil {
 		t.Fatalf("mpServerCmd = %#v, want nil", s.mpServerCmd)
 	}
@@ -269,7 +268,7 @@ func TestSupervisor_MPServer_NotStarted_DefaultState(t *testing.T) {
 
 // TestSupervisor_MPServer_Stop_NeverStarted_NoPanic は未起動 stopMPServer が panic しないことを確認。
 func TestSupervisor_MPServer_Stop_NeverStarted_NoPanic(t *testing.T) {
-	s := NewSupervisor(nil, nil, nil)
+	s := NewSupervisor(nil, nil)
 	if err := s.stopMPServer(); err != nil {
 		t.Fatalf("stopMPServer() before start = %v, want nil", err)
 	}
@@ -277,7 +276,7 @@ func TestSupervisor_MPServer_Stop_NeverStarted_NoPanic(t *testing.T) {
 
 // TestSupervisor_MPServer_MaxFails_SetLastError は 5回失敗後に manual restart 要求を記録することを確認。
 func TestSupervisor_MPServer_MaxFails_SetLastError(t *testing.T) {
-	s := NewSupervisor(nil, nil, nil)
+	s := NewSupervisor(nil, nil)
 	s.mpServerRetry = true
 	s.mpServerEnabled.Store(true)
 	s.mpServerFails = mpServerMaxFails
@@ -299,7 +298,7 @@ func TestSupervisor_MPServer_MaxFails_SetLastError(t *testing.T) {
 //
 // Phase 2.8.1: clearLastErrorLocked が startMPServerLocked より前に動く regression を検出する。
 func TestSupervisor_RestartMPServer_PreservesLastErrorOnFailure(t *testing.T) {
-	s := NewSupervisor(nil, nil, nil)
+	s := NewSupervisor(nil, nil)
 	s.mpServerRetry = true
 	// NUL を含むパスは exec.Command.Start が失敗するため、実 Python / ZMQ 環境に依存しない。
 	s.mpServerPath = "bad\x00mp_server.py"
@@ -319,7 +318,7 @@ func TestSupervisor_RestartMPServer_PreservesLastErrorOnFailure(t *testing.T) {
 
 // TestSupervisor_MPServerRunning_DefaultFalse は新規 Supervisor で mp_server.py が動作していないことを検証する。
 func TestSupervisor_MPServerRunning_DefaultFalse(t *testing.T) {
-	s := NewSupervisor(nil, nil, nil)
+	s := NewSupervisor(nil, nil)
 	if s.MPServerRunning() {
 		t.Fatal("NewSupervisor should not have running mp_server.py")
 	}
@@ -327,7 +326,7 @@ func TestSupervisor_MPServerRunning_DefaultFalse(t *testing.T) {
 
 // TestSupervisor_LastError_AtomicNilByDefault は新規 Supervisor で LastError() が nil を返すことを検証する。
 func TestSupervisor_LastError_AtomicNilByDefault(t *testing.T) {
-	s := NewSupervisor(nil, nil, nil)
+	s := NewSupervisor(nil, nil)
 	if s.LastError() != nil {
 		t.Fatalf("NewSupervisor LastError() should be nil, got: %v", s.LastError())
 	}

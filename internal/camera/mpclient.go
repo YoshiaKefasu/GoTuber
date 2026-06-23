@@ -1,19 +1,17 @@
 //go:build camera
 
-// Package camera は Phase 2 ZeroMQ IPC (MediaPipe サイドカー連携) を提供する。
+// Package camera は Phase 2 camera IPC (MediaPipe サイドカー連携) を提供する。
 //
 // アーキテクチャ (docs/PHASE2.md §4.1):
 //
-//	GoTuber (Go)                        mp_server.py (Python)
-//	┌──────────────────────────┐         ┌──────────────────┐
-//	│ CameraTracker (PUB 5555) │───────> │ Face Landmarker  │
-//	│ MPClient      (SUB 5556) │<─────── │ detection JSON   │
-//	│ Mapper (Phase 2.4)       │         └──────────────────┘
-//	└──────────────────────────┘
+//	GoTuber (Go)                           mp_server.py (Python)
+//	┌──────────────────────────────┐       ┌──────────────────┐
+//	│ MPClient (TCP listener 5556) │<──────│ detection JSONL  │
+//	│ Mapper (Phase 2.4)           │       │ cv2.VideoCapture │
+//	└──────────────────────────────┘       └──────────────────┘
 //
-// Phase 2.3 スコープは MPClient (detection subscriber) のみ。
-// capture.go (Phase 2.2) と対になる受信側。mapper.go (Phase 2.4) と
-// supervisor.go (Phase 2.5) は別ファイルに分割予定。
+// Phase 2.3 スコープは MPClient (detection receiver) のみ。
+// Phase 2.10 で ZeroMQ をやめ、localhost TCP newline-delimited JSON に置き換えた。
 //
 // スレッド:
 //   - ReceiveLoop: 専用 goroutine (呼び出し側が `go client.ReceiveLoop(ctx)` で起動)
@@ -24,33 +22,19 @@
 package camera
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
-
-	"github.com/pebbe/zmq4"
 )
 
-// detectionTopic は ZMQ SUB subscribe filter。docs/PHASE2.md 4.3 で "detection"
-// タイプの JSON を受信する想定。
-//
-// Phase 2.3c で確定: tools/mp_server.py は `pub.send_string(DETECTION_TOPIC + " " + json.dumps(msg))`
-// で wire prefix 付き publish する。Go 側 SetSubscribe("detection") と 1:1 で整合済み
-// (B 方針)。JSON 内の `type` フィールドは将来複数 type publish 対応の冗長防御。
-//
-// Wire format: "detection <JSON>" (single space separator)
-// 参考: docs/PHASE2.md Section 4.3 通信プロトコル。
-const detectionTopic = "detection"
-
-// recvTimeout は ZMQ SUB RecvBytes のタイムアウト値。EAGAIN で graceful loop を継続し、
-// loop 先頭の ctx.Done() チェックで shutdown 反応を可能にする。100ms は Ebitengine
-// 60Hz Update ループ (16.6ms) より十分長く、graceful shutdown を 100ms 以内に保証する
-// バランス (短すぎると CPU 浪費、長すぎると shutdown 反応遅延)。
+// recvTimeout は TCP accept / read のタイムアウト値。loop 先頭の ctx.Done() チェックと
+// 組み合わせて shutdown 反応を 100ms 以内に保証する。
 const recvTimeout = 100 * time.Millisecond
 
 // DetectionJSON は mp_server.py (Phase 2.1) が port 5556 に publish する
@@ -98,18 +82,17 @@ type DetectionResult struct {
 
 // MPClient は mp_server.py (Phase 2.1) から port 5556 で detection JSON を受信する。
 //
-// 設計保証 (Phase 2.3 ユーザー要件):
+// 設計保証 (Phase 2.3 / 2.10 ユーザー要件):
 //
-//  1. シンプル受信 — SUB 1 本、最新 1 件のみ保持。channel buffer は不要 (mutex + struct)。
+//  1. シンプル受信 — TCP 1 本、最新 1 件のみ保持。channel buffer は不要 (mutex + struct)。
 //  2. クラッシュ安全 — panic は defer recover() で吸収、goroutine を graceful exit。
 //  3. 再起動可能 — Close() → NewMPClient() → ReceiveLoop() のサイクルで何度でも再起動可。
 //
-// 所有権: NewMPClient 成功時にのみ sub / zmqCtx の所有権が client へ移る。
-// error path は cleanupCtx フラグで defer 経由一括解放 (Phase 1.14.1 audio capture.go
-// と同パターン、Phase 2.2 capture.go と厳密一致)。
+// 所有権: NewMPClient 成功時にのみ listener / conn の所有権が client へ移る。
+// error path は cleanupCtx フラグで defer 経由一括解放する。
 //
-// ライフサイクル: NewMPClient (即時 bind) → go ReceiveLoop(ctx) (呼び出し側が起動) →
-// Close (cancel + wg.Wait)。capture.go の Start/Close パターンと異なり、goroutine 起動は
+// ライフサイクル: NewMPClient (即時 listen) → go ReceiveLoop(ctx) (呼び出し側が起動) →
+// Close (cancel + wg.Wait)。goroutine 起動は
 // 呼び出し側の責任 (Phase 2.5 supervisor loop がラップ予定)。
 //
 // Phase 2.5+ への TODO:
@@ -137,68 +120,46 @@ type MPClient struct {
 	latestOK  bool
 
 	// Resources: NewMPClient で確保 → ReceiveLoop の defer releaseResources で解放。
-	sub    *zmq4.Socket
-	zmqCtx *zmq4.Context
+	listener net.Listener
+	conn     net.Conn
+	reader   *bufio.Reader
 }
 
-// NewMPClient は SUB socket を port 5556 に bind し、MPClient を生成する。
+// NewMPClient は TCP listener を localhost:port に bind し、MPClient を生成する。
 //
 // 起動フロー:
-//  1. zmq4.NewContext — ZMQ context 生成
-//  2. zmqCtx.NewSocket(SUB) — SUB socket 作成
-//  3. SetSubscribe("detection") — topic filter (Phase 2.5+ で mp_server.py 側 prefix 対応)
-//  4. SetRcvtimeo(100ms) — RecvBytes timeout、EAGAIN で graceful loop 継続
-//  5. Bind("tcp://localhost:port") — localhost 限定 bind (Phase 2.7 セキュリティ)
+//  1. net.Listen("tcp", "127.0.0.1:port") — localhost 限定 listen
+//  2. ReceiveLoop 側で Accept → newline-delimited JSON を受信
 //
-// 引数: detectionPort (mp_server.py の publish port、Phase 2.3 は 5556 想定)
+// 引数: detectionPort (mp_server.py の送信先ポート、Phase 2.3/2.10 は 5556 想定)
 //
-// 注: capture.go (Phase 2.2) と異なり、Start を分けず即時 bind する。SUB は接続待ちが
-// default 動作なので、bind した時点で mp_server.py の publish 開始を待機できる。
+// 注: Start を分けず即時 listen する。bind 済みのため、後から起動する mp_server.py が
+// connect してくれば受信開始できる。
 // goroutine 起動は呼び出し側が `go client.ReceiveLoop(ctx)` で行う。
 func NewMPClient(detectionPort int) (*MPClient, error) {
-	var (
-		zmqCtx *zmq4.Context
-		sub    *zmq4.Socket
-	)
+	var listener net.Listener
 	cleanupCtx := true
 	defer func() {
 		if !cleanupCtx {
 			return
 		}
-		if sub != nil {
-			_ = sub.Close()
-		}
-		if zmqCtx != nil {
-			_ = zmqCtx.Term()
+		if listener != nil {
+			_ = listener.Close()
 		}
 	}()
 
+	addr := fmt.Sprintf("127.0.0.1:%d", detectionPort)
 	var err error
-	zmqCtx, err = zmq4.NewContext()
+	listener, err = net.Listen("tcp", addr)
 	if err != nil {
-		return nil, fmt.Errorf("zmq4.NewContext: %w", err)
-	}
-	sub, err = zmqCtx.NewSocket(zmq4.SUB)
-	if err != nil {
-		return nil, fmt.Errorf("zmq4.NewSocket(SUB): %w", err)
-	}
-	if err := sub.SetSubscribe(detectionTopic); err != nil {
-		return nil, fmt.Errorf("zmq4 SUB SetSubscribe(%q): %w", detectionTopic, err)
-	}
-	if err := sub.SetRcvtimeo(recvTimeout); err != nil {
-		return nil, fmt.Errorf("zmq4 SUB SetRcvtimeo(%v): %w", recvTimeout, err)
-	}
-	addr := fmt.Sprintf("tcp://localhost:%d", detectionPort)
-	if err := sub.Bind(addr); err != nil {
-		return nil, fmt.Errorf("zmq4 SUB bind %s: %w", addr, err)
+		return nil, fmt.Errorf("net.Listen(%s): %w", addr, err)
 	}
 
-	log.Printf("camera: MPClient socket bound (sub %s, filter=%q)", addr, detectionTopic)
+	log.Printf("camera: MPClient listening on tcp://%s", addr)
 	c := &MPClient{
 		detectionPort: detectionPort,
+		listener:      listener,
 	}
-	c.sub = sub
-	c.zmqCtx = zmqCtx
 	cleanupCtx = false
 	return c, nil
 }
@@ -209,16 +170,16 @@ func NewMPClient(detectionPort int) (*MPClient, error) {
 // 管理する想定)。再起動防止: 既に running なら即 return (race-free、capture.go と同パターン)。
 //
 // フロー:
-//  1. sub.RecvBytes(0) — blocking、ただし SetRcvtimeo 100ms 設定でタイムアウト時 EAGAIN
-//  2. EAGAIN (timeout) → silent continue (loop 先頭で ctx.Done() チェック)
+//  1. listener.Accept() で localhost 接続を待つ (100ms timeout)
+//  2. 接続確立後、newline-delimited JSON を 1 行ずつ読む
 //  3. JSON parse → DetectionJSON → validateDetectionJSON → DetectionResult 変換
 //  4. mu.Lock → latest/latestSeq/latestOK 更新 → mu.Unlock
 //  5. recvCount.Add(1)
 //
 // エラーハンドリング:
-//   - RecvBytes timeout (EAGAIN) → silent continue (normal flow)
+//   - Accept / Read timeout → silent continue (normal flow)
 //   - loopCtx cancel 中の error → graceful return
-//   - その他の RecvBytes error → log + lastErrorNS 更新 + 100ms backoff + continue
+//   - その他の Accept / Read error → log + lastErrorNS 更新 + 100ms backoff + continue
 //   - JSON parse 失敗 → log warning + lastErrorNS 更新 + continue (1 件 drop、次を待つ)
 //   - type フィールド不正 → log warning + continue (将来 mp_server が複数 type publish 用)
 //
@@ -230,8 +191,8 @@ func (c *MPClient) ReceiveLoop(ctx context.Context) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	// mutex 内で再チェック (capture.go review S-1 修正と同パターン: 並行 ReceiveLoop
-	// 呼び出しで sub/zmqCtx の取り合いと goroutine リークを防止)
+	// mutex 内で再チェック: 並行 ReceiveLoop 呼び出しで listener/conn の取り合いと
+	// goroutine リークを防止する。
 	c.mu.Lock()
 	if c.running.Load() {
 		c.mu.Unlock()
@@ -261,18 +222,32 @@ func (c *MPClient) ReceiveLoop(ctx context.Context) {
 		default:
 		}
 
-		msg, err := c.sub.RecvBytes(0)
-		if err != nil {
-			// timeout (EAGAIN) は normal flow、silent continue
-			if zmq4.AsErrno(err) == zmq4.Errno(syscall.EAGAIN) {
+		if c.conn == nil {
+			if err := c.acceptOnce(); err != nil {
+				if loopCtx.Err() != nil {
+					return
+				}
+				if isTimeoutErr(err) {
+					continue
+				}
+				c.lastErrorNS.Store(time.Now().UnixNano())
+				log.Printf("camera: MPClient accept error: %v", err)
+				time.Sleep(recvTimeout)
 				continue
 			}
-			// loopCtx が cancel 済みなら graceful exit
+		}
+
+		msg, err := c.readMessage()
+		if err != nil {
 			if loopCtx.Err() != nil {
 				return
 			}
+			if isTimeoutErr(err) {
+				continue
+			}
 			c.lastErrorNS.Store(time.Now().UnixNano())
-			log.Printf("camera: MPClient RecvBytes error: %v", err)
+			log.Printf("camera: MPClient read error: %v", err)
+			c.closeConn()
 			time.Sleep(recvTimeout)
 			continue
 		}
@@ -353,24 +328,79 @@ func (c *MPClient) Close() error {
 	return nil
 }
 
-// releaseResources は sub / zmqCtx を解放する。
+// releaseResources は conn / listener を解放する。
 // ReceiveLoop の defer から呼ばれる (goroutine exit 時に 1 回だけ実行)。
-// nil ガード + 各 Close/Term の冪等性で error path でも安全に呼べる (capture.go と同じ)。
+// nil ガード + Close の冪等性で error path でも安全に呼べる。
 func (c *MPClient) releaseResources() {
-	if c.sub != nil {
-		_ = c.sub.Close()
-		c.sub = nil
+	c.closeConn()
+	if c.listener != nil {
+		_ = c.listener.Close()
+		c.listener = nil
 	}
-	if c.zmqCtx != nil {
-		_ = c.zmqCtx.Term()
-		c.zmqCtx = nil
+}
+
+func (c *MPClient) acceptOnce() error {
+	if c.listener == nil {
+		return fmt.Errorf("listener is nil")
 	}
+	if tcpLn, ok := c.listener.(*net.TCPListener); ok {
+		_ = tcpLn.SetDeadline(time.Now().Add(recvTimeout))
+	}
+	conn, err := c.listener.Accept()
+	if err != nil {
+		return err
+	}
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		_ = tcpConn.SetNoDelay(true)
+	}
+	c.conn = conn
+	c.reader = bufio.NewReader(conn)
+	log.Printf("camera: MPClient accepted detection stream from %s", conn.RemoteAddr())
+	return nil
+}
+
+func (c *MPClient) readMessage() ([]byte, error) {
+	if c.conn == nil {
+		return nil, fmt.Errorf("conn is nil")
+	}
+	_ = c.conn.SetReadDeadline(time.Now().Add(recvTimeout))
+	line, err := c.reader.ReadBytes('\n')
+	if err != nil {
+		return nil, err
+	}
+	return []byte(stringsTrimLine(string(line))), nil
+}
+
+func (c *MPClient) closeConn() {
+	if c.conn != nil {
+		_ = c.conn.Close()
+		c.conn = nil
+	}
+	c.reader = nil
+}
+
+func isTimeoutErr(err error) bool {
+	if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		return true
+	}
+	return false
+}
+
+func stringsTrimLine(s string) string {
+	for len(s) > 0 {
+		last := s[len(s)-1]
+		if last != '\n' && last != '\r' {
+			break
+		}
+		s = s[:len(s)-1]
+	}
+	return s
 }
 
 // --- 状態 observer (lock-free, 任意の goroutine から安全) ---
 
 // RecvCount は ReceiveLoop 開始後の parse + validate 成功検出数累計を返す。
-// capture.go の SentCount (Phase 2.2 PUB 送信数) と対称。
+// detection 受信数の累計。
 func (c *MPClient) RecvCount() int64 { return c.recvCount.Load() }
 
 // IsRunning は ReceiveLoop が生存している間 true。
@@ -389,7 +419,7 @@ func (c *MPClient) LastErrorAt() time.Time {
 	return time.Unix(0, ns)
 }
 
-// truncateLog は log 用に長いバイト列を切り詰める。ZMQ 受信失敗時のデバッグ用。
+// truncateLog は log 用に長いバイト列を切り詰める。TCP 受信失敗時のデバッグ用。
 // len(b) <= max の場合はそのまま返す。
 func truncateLog(b []byte, max int) string {
 	if len(b) <= max {

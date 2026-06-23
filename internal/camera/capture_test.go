@@ -1,4 +1,4 @@
-//go:build camera
+//go:build ignore
 
 package camera
 

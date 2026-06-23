@@ -255,7 +255,7 @@ func main() {
 		log.Printf("camera: manual restart triggered")
 	})
 
-	// Phase 2.5: camera supervisor 起動 (libzmq 利用可能時のみ動作)。
+	// Phase 2.5: camera supervisor 起動。
 	// `//go:build camera` ガード下の init() で cameraHook が設定される。
 	// Phase 1 ビルド (-tags なし): cameraHook は nil → runCameraHook は no-op、
 	//                            既存のマウス追従のみが動作 (Phase 1 ビルド影響なし)。

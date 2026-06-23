@@ -6,11 +6,13 @@
 #   ./scripts/build.sh --dev          # デバッグビルド (-ldflags なし)
 #   ./scripts/build.sh --clean        # ビルド前に bin/ 削除
 #   ./scripts/build.sh --skip-test    # テストスキップ
+#   ./scripts/build.sh --camera       # Phase 2 camera 有効ビルド (-tags camera)
 #
 # Requirements:
 #   - Go 1.25+ (実要件は go.mod の go ディレクティブを参照。Phase 1.9 時点で 1.26 系)
 #   - gcc + libasound2-dev (malgo CGo)
 #     sudo apt install gcc libasound2-dev build-essential
+#   - Camera build: 追加の native 依存なし (Python sidecar 実行時は Python 3 + mediapipe/opencv)
 
 set -euo pipefail
 
@@ -41,19 +43,25 @@ else
     CYAN='' YELLOW='' GREEN='' RED='' NC=''
 fi
 
-echo -e "${CYAN}=== GoTuber build (Linux) ===${NC}"
-
 DEV=false
 CLEAN=false
 SKIP_TEST=false
+CAMERA=false
 for arg in "$@"; do
     case "$arg" in
         --dev)        DEV=true ;;
         --clean)      CLEAN=true ;;
         --skip-test)  SKIP_TEST=true ;;
+        --camera)     CAMERA=true ;;
         *)            echo "Unknown arg: $arg" >&2; exit 1 ;;
     esac
 done
+
+if [ "$CAMERA" = true ]; then
+    echo -e "${CYAN}=== GoTuber build (Linux + camera) ===${NC}"
+else
+    echo -e "${CYAN}=== GoTuber build (Linux) ===${NC}"
+fi
 
 if [ "$CLEAN" = true ] && [ -d "bin" ]; then
     echo "Cleaning bin/"
@@ -64,11 +72,19 @@ mkdir -p "bin"
 
 if [ "$SKIP_TEST" = false ]; then
     echo -e "${YELLOW}--- go test ---${NC}"
-    "$GO_BIN" test ./...
+    if [ "$CAMERA" = true ]; then
+        "$GO_BIN" test -tags camera ./...
+    else
+        "$GO_BIN" test ./...
+    fi
 fi
 
 echo -e "${YELLOW}--- go vet ---${NC}"
-"$GO_BIN" vet ./...
+if [ "$CAMERA" = true ]; then
+    "$GO_BIN" vet -tags camera ./...
+else
+    "$GO_BIN" vet ./...
+fi
 
 LDFLAGS_ARGS=()
 if [ "$DEV" = false ]; then
@@ -76,9 +92,18 @@ if [ "$DEV" = false ]; then
     LDFLAGS_ARGS=(-ldflags "-s -w")
 fi
 
-echo -e "${YELLOW}--- Linux build ---${NC}"
-"$GO_BIN" build "${LDFLAGS_ARGS[@]}" -o bin/gotuber ./cmd/gotuber
-
-SIZE=$(du -h "bin/gotuber" | cut -f1)
-echo ""
-echo -e "${GREEN}OK: bin/gotuber ($SIZE)${NC}"
+TAGS_ARGS=()
+if [ "$CAMERA" = true ]; then
+    TAGS_ARGS=(-tags camera)
+    echo -e "${YELLOW}--- Linux build (+ camera) ---${NC}"
+    "$GO_BIN" build "${LDFLAGS_ARGS[@]}" "${TAGS_ARGS[@]}" -buildvcs=false -o bin/gotuber-camera ./cmd/gotuber
+    SIZE=$(du -h "bin/gotuber-camera" | cut -f1)
+    echo ""
+    echo -e "${GREEN}OK: bin/gotuber-camera ($SIZE) [Linux ELF]${NC}"
+else
+    echo -e "${YELLOW}--- Linux build ---${NC}"
+    "$GO_BIN" build "${LDFLAGS_ARGS[@]}" -o bin/gotuber ./cmd/gotuber
+    SIZE=$(du -h "bin/gotuber" | cut -f1)
+    echo ""
+    echo -e "${GREEN}OK: bin/gotuber ($SIZE)${NC}"
+fi

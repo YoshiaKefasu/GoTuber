@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-// テスト方針: libzmq / webcam を import しない。DetectionJSON の JSON roundtrip と
+// テスト方針: native 依存なし。DetectionJSON の JSON roundtrip と
 // MPClient の immutable config / state observer (atomic) のみ検証。
-// NewMPClient / ReceiveLoop の integration テストは libzmq 必須のため Phase 2.10 で別途実施。
+// NewMPClient / ReceiveLoop の integration テストは loopback TCP を使うため、別途追加可能。
 
 // --- DetectionJSON の JSON wire format テスト ---
 
@@ -234,12 +234,12 @@ func TestValidateDetectionJSON_RejectsBadType(t *testing.T) {
 	}
 }
 
-// --- MPClient の state observer / lifecycle テスト (libzmq 不要) ---
+// --- MPClient の state observer / lifecycle テスト (native 依存不要) ---
 
 // TestMPClient_DefaultState は NewMPClient を呼ばずに直接生成した MPClient の observer
 // (Latest / RecvCount / IsRunning / LastErrorAt) がすべてデフォルト値を返すことを確認する。
 //
-// NewMPClient は libzmq 必須なので呼ばない。MPClient{} のゼロ値で observer の安全性を確認。
+// MPClient{} のゼロ値で observer の安全性を確認。
 // ReceiveLoop を起動するまでは goroutine が走らないため、observer は全て安全にアクセス可能
 // (Phase 2.2 capture_test.go TestCameraTracker_StateDefaults と同パターン)。
 func TestMPClient_DefaultState(t *testing.T) {
@@ -289,8 +289,8 @@ func TestMPClient_DefaultState(t *testing.T) {
 // TestMPClient_Close_NeverStarted_NoPanic は ReceiveLoop を一度も起動していない MPClient
 // に対して Close() を呼んでも panic しないことを確認する。
 //
-// libzmq 不在のテスト環境でも panic しないことを保証。Close は cancel == nil ガード +
-// wg.Wait() 即 return で safe。実際の ZMQ リソースは nil のため releaseResources は
+// native 依存なしのテスト環境でも panic しないことを保証。Close は cancel == nil ガード +
+// wg.Wait() 即 return で safe。実際の TCP リソースは nil のため releaseResources は
 // skip される (nil ガード)。
 func TestMPClient_Close_NeverStarted_NoPanic(t *testing.T) {
 	c := &MPClient{detectionPort: 5556}

@@ -90,7 +90,7 @@
 - C コンパイラ（MSVC または gcc）— CGo (malgo) のため
   - Windows: `scoop install mingw` または MSVC Build Tools
   - WSL: `sudo apt install gcc libasound2-dev build-essential`
-- Phase 2 以降: MediaPipe Face Landmarker (Python サイドカー) + ZeroMQ IPC (Go 側 `pebbe/zmq4`)
+- Phase 2 以降: MediaPipe Face Landmarker (Python サイドカー) + localhost TCP JSONL IPC
   - Face Landmarker モデルは `assets/models/face_landmarker.task` に同梱済み（約 3.6 MB、Apache-2.0）
 - Python 3（スライス生成時のみ、純粋な標準ライブラリのみ使用、ffmpeg/ffprobe が必要）— `pip install -r tools/requirements.txt`
 
@@ -103,16 +103,29 @@
 .\scripts\build.ps1 -Clean     # bin/ 削除してビルド
 ```
 
+#### Camera build (Phase 2)
+```powershell
+.\scripts\build.ps1 -Camera      # Windows native camera build
+.\bin\gotuber-camera.exe
+```
+
+補足:
+- Phase 2.10 で `blackjack/webcam` / ZeroMQ 依存を除去済み
+- Go 側 camera 通信は localhost TCP JSONL
+- Python sidecar 実行時は `tools/requirements-mp.txt` の依存が必要
+
 #### WSL Ubuntu / Linux
 ```bash
 ./scripts/build.sh             # リリースビルド
 ./scripts/build.sh --dev       # デバッグビルド
 ./scripts/build.sh --skip-test # テストスキップ
+./scripts/build.sh --camera    # Phase 2 camera 有効ビルド
 ```
 
 #### 開発ループ（ビルド + 実行）
 ```powershell
 .\scripts\dev.ps1              # Windows
+.\scripts\dev.ps1 -Camera     # camera 有効 (Windows native)
 ```
 ```bash
 ./scripts/dev.sh               # Linux

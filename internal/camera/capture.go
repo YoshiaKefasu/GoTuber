@@ -1,4 +1,4 @@
-//go:build camera
+//go:build ignore
 
 // Package camera は Phase 2 ZeroMQ IPC (MediaPipe サイドカー連携) を提供する。
 //

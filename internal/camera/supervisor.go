@@ -4,26 +4,31 @@
 //
 // 責務 (docs/PHASE2.md Section 2.5 + Section 1.1 配信中可用性方針):
 //
-//   - L1 CameraTracker (Phase 2.2) と L2 MPClient (Phase 2.3) の lifecycle 管理
+//   - L2 MPClient (Phase 2.3) の lifecycle 管理
 //   - 60Hz supervisor loop で mpclient.Latest() を呼び、顔検出状態を判定
 //   - mouse ↔ camera 排他制御 (1秒タイムアウトで mouse mode フォールバック)
-//   - L1/L2 の IsRunning() == false 検知 → exponential backoff で自動再起動
+//   - L2 の IsRunning() == false 検知 → exponential backoff で自動再起動
+//   - mp_server.py サブプロセス spawn・監視・再起動 (Phase 2.7)
 //   - supervisor loop 自身の panic 吸収 (defer recover)
+//
+// Phase 2.10: CameraTracker (webcam capture) 依存を除去。
+// webcam capture は mp_server.py (Python sidecar) が担当。
+// Go 側は mp_server.py の spawn/監視 + mpclient 検出結果受信に集中。
 //
 // 3 層構成:
 //
 //	┌─────────────────────────────────────────────────────────┐
 //	│ L3 Supervisor (本ファイル、Phase 2.5)                  │
 //	│   ├─ 60Hz loop: face detection 判定 → mode 切替          │
-//	│   ├─ tracker.IsRunning() 監視 → 自動再起動              │
-//	│   └─ mpclient.IsRunning() 監視 → 自動再起動             │
+//	│   ├─ mpclient.IsRunning() 監視 → 自動再起動             │
+//	│   └─ mp_server.py 監視 → 自動再起動                      │
 //	└─────────────────────────────────────────────────────────┘
-//	      ↓ 管理                ↓ 管理
-//	┌─────────────────┐    ┌────────────────────┐
-//	│ L1 CameraTracker│    │ L2 MPClient        │
-//	│ (Phase 2.2)     │    │ (Phase 2.3)        │
-//	│ defer recover   │    │ defer recover      │
-//	└─────────────────┘    └────────────────────┘
+//	                     ↓ 管理
+//	┌────────────────────────────────────────────┐
+//	│ L2 MPClient                                │
+//	│ (Phase 2.3)                                │
+//	│ defer recover                              │
+//	└────────────────────────────────────────────┘
 //
 // Phase 2.7:
 //   - BlinkFilter を tickCell / EyesClosed に統合
@@ -101,28 +106,31 @@ const (
 
 const errMPServerMaxFails = "mp_server.py 5回連続失敗、手動再起動必要"
 
-// Supervisor は L1 (CameraTracker) と L2 (MPClient) の lifecycle +
+// Supervisor は L2 (MPClient) の lifecycle +
 // mouse/camera 排他制御を管理する L3 supervisor loop。
 //
 // 設計保証 (Phase 2.5 + 配信中可用性方針 Section 1.1):
 //
 //  1. クラッシュ安全 — supervisor loop の panic は defer recover で吸収、
 //     メイン GoTuber プロセスには影響しない。
-//  2. 自動再起動 — L1/L2 が IsRunning() == false になったら exponential backoff で
+//  2. 自動再起動 — L2 が IsRunning() == false になったら exponential backoff で
 //     自動再起動 (1s → 2s → 4s → 8s → 16s → 30s 上限、3 回成功でリセット)。
 //  3. 排他制御 — 顔検出 1 秒タイムアウトで mouse mode にフォールバック、
 //     顔検出復帰で camera mode に自動切替。
 //  4. 冪等 Start/Stop — 何ほど呼んでも安全。
 //
-// YAGNI: tracker / mpclient が nil でも supervisor は lifecycle 管理できる設計
+// Phase 2.10: CameraTracker (webcam capture) 依存を除去。
+// webcam capture は mp_server.py (Python sidecar) が担当。
+// Go 側は mp_server.py の spawn/監視 + mpclient 検出結果受信に集中。
+//
+// YAGNI: mpclient が nil でも supervisor は lifecycle 管理できる設計
 // (supervisor 単体テスト容易性、libzmq 不在環境でもテスト可能)。
 //
 // 所有権: Start 成功時にのみ loopCtx / cancel の所有権が supervisor へ移る。
 // error path は cleanupCtx フラグで defer 経由一括解放
-// (Phase 1.14.1 audio capture.go と同パターン、capture.go / mpclient.go と厳密一致)。
+// (Phase 1.14.1 audio capture.go と同パターン、mpclient.go と厳密一致)。
 type Supervisor struct {
 	// Dependencies (immutable after NewSupervisor)
-	tracker       *CameraTracker  // Phase 2.2、L1
 	mpclient      *MPClient       // Phase 2.3、L2
 	mouseFollower *mouse.Follower // Phase 1.12、camera mode → mouse mode 復帰時の参照。
 	//                              現状 (Phase 2.5) は保持のみ、Phase 2.6+ で
@@ -178,22 +186,21 @@ type supervisorState struct {
 	running      atomic.Bool            // supervisor loop が生存中
 	mode         atomic.Int32           // CameraMode (0/1)
 	lastError    atomic.Pointer[string] // 直近エラーメッセージ (Tweaks 表示用、Phase 2.8)
-	cameraFps    atomic.Int64           // CameraTracker.SentCount() の snapshot (debug 用)
 	detectionFps atomic.Int64           // MPClient.RecvCount() の snapshot (debug 用)
 }
 
-// NewSupervisor は L3 supervisor を生成する (L1/L2 は起動しない、Start まで遅延)。
+// NewSupervisor は L3 supervisor を生成する (L2 は起動しない、Start まで遅延)。
 //
 // 引数:
 //
-//	tracker  — L1 CameraTracker (Phase 2.2)、nil 可 (YAGNI: supervisor 単体テスト容易性)
 //	mpclient — L2 MPClient (Phase 2.3)、nil 可
 //	mouse    — Phase 1.12 MouseFollower (camera → mouse 復帰時の参照、現状は保持のみ)
 //
 // 戻り値: *Supervisor。stateObserver は即時初期化される。
-func NewSupervisor(tracker *CameraTracker, mpclient *MPClient, mouse *mouse.Follower) *Supervisor {
+//
+// Phase 2.10: tracker パラメータを削除。webcam capture は mp_server.py が担当。
+func NewSupervisor(mpclient *MPClient, mouse *mouse.Follower) *Supervisor {
 	return &Supervisor{
-		tracker:       tracker,
 		mpclient:      mpclient,
 		mouseFollower: mouse,
 		blinkFilter:   NewBlinkFilter(),
@@ -202,18 +209,19 @@ func NewSupervisor(tracker *CameraTracker, mpclient *MPClient, mouse *mouse.Foll
 	}
 }
 
-// Start は L1/L2 を起動し supervisor loop を別 goroutine で開始する。
+// Start は L2 を起動し supervisor loop を別 goroutine で開始する。
 //
 // フロー:
 //
 //  1. mutex 内で再チェック (冪等: 既に running なら no-op、Phase 2.2 capture.go と同パターン)
-//  2. L1 CameraTracker.Start (失敗時は error path で cleanupCtx 経由解放)
-//  3. L2 MPClient.ReceiveLoop を goroutine で起動 (NewMPClient は NewSupervisor 時点で bind 済)
-//  4. supervisor loop を goroutine で起動
+//  2. L2 MPClient.ReceiveLoop を goroutine で起動 (NewMPClient は NewSupervisor 時点で bind 済)
+//  3. supervisor loop を goroutine で起動
 //
 // 冪等: 既に running なら no-op (race-free、mutex 下で re-check)。
 //
 // エラー時: defer クリーンアップで部分確保リソースを全解放 (cleanupCtx パターン)。
+//
+// Phase 2.10: CameraTracker 起動を削除。webcam capture は mp_server.py が担当。
 func (s *Supervisor) Start(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -242,15 +250,6 @@ func (s *Supervisor) Start(ctx context.Context) error {
 		cancel()
 	}()
 
-	// L1 CameraTracker 起動 (nil なら skip、YAGNI: supervisor 単体テスト用)
-	if s.tracker != nil {
-		if err := s.tracker.Start(loopCtx); err != nil {
-			s.setLastErrorLocked("tracker.Start: " + err.Error())
-			return err
-		}
-		log.Printf("camera: supervisor: tracker started")
-	}
-
 	// L2 MPClient 起動 (nil なら skip、NewMPClient は NewSupervisor 時点で bind 済)
 	if s.mpclient != nil {
 		s.wg.Add(1)
@@ -274,17 +273,18 @@ func (s *Supervisor) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop は supervisor loop を停止し、L1/L2 を graceful shutdown する。
+// Stop は supervisor loop を停止し、L2 を graceful shutdown する。
 //
 // フロー:
 //
 //  1. mutex 内で running をチェック (冪等: 二重 Stop 安全)
 //  2. cancel() で loopCtx 終了信号
 //  3. wg.Wait() で supervisor loop + MPClient.ReceiveLoop の終了を待つ
-//  4. L1 CameraTracker.Close() で webcam/zmq を解放
 //
 // 任意の goroutine から複数回呼んで OK (cancel ガード + wg.Wait 冪等)。
 // Start 前 / Start 失敗後でも安全 (cancel == nil ガード、wg.Wait 即 return)。
+//
+// Phase 2.10: CameraTracker.Close 削除。webcam capture は mp_server.py が担当。
 func (s *Supervisor) Stop() error {
 	s.mu.Lock()
 	if s.cancel != nil {
@@ -301,13 +301,7 @@ func (s *Supervisor) Stop() error {
 	// supervisor loop + MPClient.ReceiveLoop の終了を待つ
 	s.wg.Wait()
 
-	// L1 CameraTracker.Close (nil ガード、tracker.Close() 自体が nil-safe)
-	if s.tracker != nil {
-		if err := s.tracker.Close(); err != nil {
-			log.Printf("camera: supervisor: tracker.Close error (ignored): %v", err)
-		}
-	}
-	// MPClient は ReceiveLoop 終了時に releaseResources() で sub/zmqCtx を解放済み。
+	// MPClient は ReceiveLoop 終了時に releaseResources() で conn/listener を解放済み。
 	// ここでは nil ガード + Close() を呼ぶが、ReceiveLoop が既に終了している場合は
 	// 即 return (mpclient.Close の cancel ガードで冪等)。
 	if s.mpclient != nil {
@@ -348,13 +342,15 @@ func anyToString(v any) string {
 //  2. faceDetected 判定 (1秒タイムアウト: now - lastDetected < 1.0)
 //  3. mode 切替: faceDetected && mode == Mouse → switchToCameraLocked
 //  4. mode 切替: !faceDetected && mode == Camera → switchToMouseLocked
-//  5. tracker/mpclient IsRunning() 監視 → 失敗時 exponential backoff で再起動
+//  5. mpclient IsRunning() 監視 → 失敗時 exponential backoff で再起動
 //  6. mp_server.py サブプロセス監視 → 失敗時 exponential backoff で再起動
 //
 // 終了条件: loopCtx.Done() または panic (defer recover で吸収、goroutine graceful exit)。
 //
 // defer は LIFO 順で: recover → stateObserver.running.Store(false)。
 // wg.Done は起動側 goroutine の defer が担当し、panic 時もメインプロセス無影響 + 状態観測整合。
+//
+// Phase 2.10: CameraTracker 監視を削除。webcam capture は mp_server.py が担当。
 func (s *Supervisor) supervisorLoop(ctx context.Context) {
 	defer s.stateObserver.running.Store(false)
 
@@ -369,9 +365,6 @@ func (s *Supervisor) supervisorLoop(ctx context.Context) {
 	defer ticker.Stop()
 
 	// 再起動バックオフ state (supervisor lifetime で保持)
-	trackerBackoff := time.Duration(0)
-	trackerFailCount := 0
-	trackerSuccessCount := 0
 	mpclientBackoff := time.Duration(0)
 	mpclientFailCount := 0
 	mpclientSuccessCount := 0
@@ -392,13 +385,7 @@ func (s *Supervisor) supervisorLoop(ctx context.Context) {
 		s.tickDetectionSnapshot(dr, ok)
 		s.tickCell(dr, ok)
 
-		// 2. L1/L2 生存監視 + 再起動 (exponential backoff)
-		if s.tracker != nil {
-			trackerBackoff, trackerFailCount, trackerSuccessCount = s.monitorAndRestart(
-				ctx, "tracker", s.tracker.IsRunning, s.startTracker,
-				trackerBackoff, trackerFailCount, trackerSuccessCount,
-			)
-		}
+		// 2. L2 生存監視 + 再起動 (exponential backoff)
 		if s.mpclient != nil {
 			mpclientBackoff, mpclientFailCount, mpclientSuccessCount = s.monitorAndRestart(
 				ctx, "mpclient", s.mpclient.IsRunning, s.startMPClient,
@@ -410,9 +397,6 @@ func (s *Supervisor) supervisorLoop(ctx context.Context) {
 		}
 
 		// 3. FPS snapshot (debug 用、Tweaks 表示は Phase 2.8)
-		if s.tracker != nil {
-			s.stateObserver.cameraFps.Store(s.tracker.SentCount())
-		}
 		if s.mpclient != nil {
 			s.stateObserver.detectionFps.Store(s.mpclient.RecvCount())
 		}
@@ -513,7 +497,7 @@ func (s *Supervisor) switchToMouseLocked() {
 //
 // 戻り値: (新しい backoff duration, 新しい fail count, 新しい success count)。
 // supervisor loop の 60Hz で毎 tick 呼ばれるので、isAlive callback は lock-free 必須
-// (CameraTracker.IsRunning / MPClient.IsRunning は atomic.Bool.Load)。
+// (MPClient.IsRunning は atomic.Bool.Load)。
 func (s *Supervisor) monitorAndRestart(
 	ctx context.Context,
 	name string,
@@ -579,20 +563,6 @@ func nextBackoff(failCount int) time.Duration {
 		return restartBackoffMax
 	}
 	return d
-}
-
-// startTracker は L1 CameraTracker を再起動する (古い tracker の Close → 新規 Start)。
-//
-// YAGNI: 同一インスタンスの Start は mutex 競合の可能性があるので、Close → 作り直し推奨
-// (Phase 2.2 capture.go の Close → NewCameraTracker → Start パターン)。
-//
-// ただし Phase 2.5 では L1 を supervisor 内で再生成せず、Start のみで再試行する。
-// 完全な再生成は Phase 2.7 (port bind 競合回避込み) で実装予定。
-func (s *Supervisor) startTracker(ctx context.Context) error {
-	if s.tracker == nil {
-		return errors.New("tracker is nil")
-	}
-	return s.tracker.Start(ctx)
 }
 
 // startMPClient は L2 MPClient の ReceiveLoop を再起動する。
@@ -957,14 +927,6 @@ func (s *Supervisor) LastError() *string {
 // supervisor が保持するプロセス状態から最小限に算出する。
 func (s *Supervisor) MPServerRunning() bool {
 	return s.mpServerEnabled.Load()
-}
-
-// CameraFps は CameraTracker の累計送信フレーム数を返す (debug 用)。
-//
-// 瞬間 FPS ではなく累計カウント (SentCount 経由)。Tweaks 表示 (Phase 2.8) で
-// 経過時間から FPS を計算する想定。
-func (s *Supervisor) CameraFps() int64 {
-	return s.stateObserver.cameraFps.Load()
 }
 
 // DetectionFps は MPClient の累計受信検出数を返す (debug 用)。

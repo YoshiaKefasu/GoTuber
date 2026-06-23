@@ -5,11 +5,9 @@ Spec: docs/PHASE2.md Section 4.1, 4.3, Phase 2.1 / Phase 2.3.
 
 Captures the local webcam, runs MediaPipe Face Landmarker (Tasks API)
 per frame, and publishes detection JSON (yaw/pitch/roll, EAR left/right,
-face_center_x/y) on ZeroMQ PUB port 5556 with the topic prefix
-"detection " (Phase 2.3 wire-format alignment; matches Go-side
-SetSubscribe("detection") in internal/camera/mpclient.go). The reverse
-channel (ZeroMQ SUB on port 5555) is wired but only logged in Phase 2.1;
-Go-side frame publishing lands in Phase 2.2/2.5.
+face_center_x/y) to GoTuber over localhost TCP port 5556 as newline-delimited
+JSON. The older ZeroMQ frame/detection transport was removed in Phase 2.10
+to eliminate Windows native build blockers (`zmq.h`, libzmq).
 
 YAGNI: this is the Phase 2.1 minimum. VIDEO mode, blendshape parsing,
 multi-face, frame-driven detection, and ack semantics are intentionally
@@ -23,15 +21,16 @@ import json
 import logging
 import math
 import signal
-import sys
 import threading
+import sys
+import socket
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any, Final, Optional
 
-# cv2 / mediapipe / numpy / zmq are lazy-imported inside main() and the
+# cv2 / mediapipe / numpy are lazy-imported inside main() and the
 # geometry helpers so that `python tools/mp_server.py --help` works in
 # any Python 3.9+ interpreter without the .venv-mp env being activated.
 
@@ -53,13 +52,6 @@ DEFAULT_MODEL_PATH: Final[Path] = (
     Path(__file__).resolve().parent.parent / "assets" / "models" / "face_landmarker.task"
 )
 
-# ZeroMQ PUB topic prefix for outbound detection messages.
-# Wire format: "detection <json>" (single space separator). Kept in sync
-# with internal/camera/mpclient.go's SetSubscribe("detection") on the Go
-# side (Phase 2.3 wire-format alignment). Without this prefix, the Go
-# topic filter rejects the message because the JSON body starts with '{'.
-DETECTION_TOPIC: Final[str] = "detection"
-
 # Landmark indices per docs/PHASE2.md Phase 2.1.
 LANDMARK_NOSE_TIP: Final[int] = 1
 LANDMARK_FOREHEAD: Final[int] = 10
@@ -78,7 +70,6 @@ _LANDMARK_LEFT_EYE: Final[dict[str, int]] = {
 # Behaviour knobs.
 _FACE_LOST_WARN_SEC: Final[float] = 5.0      # warn after no-face for this long
 _FPS_DEBUG_INTERVAL: Final[int] = 30         # --debug: log fps every N frames
-_SUB_RECV_TIMEOUT_MS: Final[int] = 200       # SUB poll interval for graceful exit
 _CAMERA_READ_RETRY_SEC: Final[float] = 0.05  # sleep when cap.read() fails
 _FRAME_MODEL_MIN_BYTES: Final[int] = 1_000_000  # real model is ~3-5 MB
 
@@ -110,16 +101,16 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         description=(
             "GoTuber Phase 2 MediaPipe Python sidecar. Captures the local "
             "webcam, runs Face Landmarker, publishes detection JSON over "
-            "ZeroMQ PUB. See docs/PHASE2.md Section 4.1/4.3."
+            "localhost TCP JSONL. See docs/PHASE2.md Section 4.1/4.3."
         ),
     )
     parser.add_argument(
         "--frame-port", type=int, default=5555,
-        help="ZeroMQ SUB port for inbound frames (Phase 2.5+ Go-side camera).",
+        help="Deprecated former inbound frame port. Ignored in Phase 2.10+.",
     )
     parser.add_argument(
         "--detection-port", type=int, default=5556,
-        help="ZeroMQ PUB port for outbound detection JSON (GoTuber subscribes).",
+        help="TCP port for outbound detection JSONL stream.",
     )
     parser.add_argument(
         "--camera-id", type=int, default=0,
@@ -405,35 +396,6 @@ def build_detection_message(
     }
 
 
-# ---------------------------------------------------------------------------
-# Frame receiver (Phase 2.1 stub)
-# ---------------------------------------------------------------------------
-
-def _frame_recv_loop(
-    sub: Any, stop_event: threading.Event, log: logging.Logger,
-) -> None:
-    """Drain inbound frames from SUB; log size only in Phase 2.1.
-
-    TODO Phase 2.5: parse base64 JPEG, decode to BGR, feed detector instead
-    of (or alongside) cv2.VideoCapture. No ACK is sent in Phase 2.1.
-    """
-    import zmq  # local import: keeps the helper analyzable in isolation
-
-    while not stop_event.is_set():
-        try:
-            msg = sub.recv_string()
-        except zmq.Again:
-            continue
-        except zmq.ZMQError as e:
-            if stop_event.is_set():
-                return
-            log.debug("SUB recv error: %s", e)
-            continue
-        log.debug(
-            "Frame received: %d bytes (no-op, ack disabled in Phase 2.1)",
-            len(msg),
-        )
-
 
 # ---------------------------------------------------------------------------
 # FPS counter
@@ -479,7 +441,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = _parse_args(argv)
     log = _setup_logger(args.debug)
 
-    log.info("GoTuber Phase 2.1 mp_server starting (docs/PHASE2.md 4.1/4.3)")
+    log.info("GoTuber Phase 2.10 mp_server starting (docs/PHASE2.md 4.1/4.3)")
     log.info(
         "config: frame_port=%d detection_port=%d camera_id=%d model=%s debug=%s",
         args.frame_port, args.detection_port, args.camera_id,
@@ -489,7 +451,6 @@ def main(argv: Optional[list[str]] = None) -> int:
     import cv2
     import mediapipe as mp
     import numpy as np
-    import zmq
 
     # 1. Model
     model_path = Path(args.model_path)
@@ -499,33 +460,27 @@ def main(argv: Optional[list[str]] = None) -> int:
         log.error("Model setup failed: %s", e)
         return 1
 
-    zmq_ctx: Optional[zmq.Context] = None
-    pub: Optional[zmq.Socket] = None
-    sub: Optional[zmq.Socket] = None
+    client_sock: Optional[socket.socket] = None
     cap: Optional[cv2.VideoCapture] = None
     detector: Any = None
-    recv_thread: Optional[threading.Thread] = None
     stop_event = threading.Event()
     fps = _FpsCounter()
     frames_published = 0
     exit_code = 0
 
     try:
-        zmq_ctx = zmq.Context.instance()
-
-        pub = zmq_ctx.socket(zmq.PUB)
-        try:
-            pub.bind(f"tcp://*:{args.detection_port}")
-        except zmq.ZMQError as e:
-            log.error("Failed to bind PUB port %d: %s", args.detection_port, e)
-            return 1
-        log.info("PUB bound to tcp://*:%d", args.detection_port)
-
-        sub = zmq_ctx.socket(zmq.SUB)
-        sub.setsockopt(zmq.SUBSCRIBE, b"")
-        sub.setsockopt(zmq.RCVTIMEO, _SUB_RECV_TIMEOUT_MS)
-        sub.connect(f"tcp://localhost:{args.frame_port}")
-        log.info("SUB connected to tcp://localhost:%d", args.frame_port)
+        connect_deadline = time.monotonic() + 5.0
+        while True:
+            try:
+                client_sock = socket.create_connection(("127.0.0.1", args.detection_port), timeout=1.0)
+                client_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                break
+            except OSError as e:
+                if time.monotonic() >= connect_deadline:
+                    log.error("Failed to connect to GoTuber on 127.0.0.1:%d: %s", args.detection_port, e)
+                    return 1
+                time.sleep(0.2)
+        log.info("Connected to GoTuber TCP listener on 127.0.0.1:%d", args.detection_port)
 
         cap = cv2.VideoCapture(args.camera_id)
         if not cap.isOpened():
@@ -551,14 +506,6 @@ def main(argv: Optional[list[str]] = None) -> int:
         # lets Linux/macOS supervisors kill mp_server cleanly.
         if hasattr(signal, "SIGTERM"):
             signal.signal(signal.SIGTERM, _on_signal)
-
-        recv_thread = threading.Thread(
-            target=_frame_recv_loop,
-            args=(sub, stop_event, log),
-            name="mp-frame-recv",
-            daemon=True,
-        )
-        recv_thread.start()
 
         seq = 0
         last_face_seen = time.monotonic()
@@ -594,12 +541,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                 frame_shape=frame.shape, timestamp=timestamp,
             )
             try:
-                # Topic-prefixed publish so the Go-side SetSubscribe("detection")
-                # topic filter accepts the message (Phase 2.3 wire-format).
-                # Wire format: "detection <json>" with a single space separator.
-                pub.send_string(DETECTION_TOPIC + " " + json.dumps(msg))
-            except zmq.ZMQError as e:
-                log.error("PUB send failed: %s", e)
+                assert client_sock is not None
+                client_sock.sendall((json.dumps(msg) + "\n").encode("utf-8"))
+            except OSError as e:
+                log.error("TCP send failed: %s", e)
                 exit_code = 1  # Process supervisor (systemd / Go-side spawner) needs to know this is a fatal failure, not a clean shutdown
                 break
 
@@ -631,13 +576,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         exit_code = 1
     finally:
         log.info("Cleaning up...")
-        # cap.release() takes no args; detector.close() takes no args; zmq
-        # sockets accept linger=linger to drop pending messages immediately.
         for resource, name, kwargs in (
             (cap, "cap", {}),
             (detector, "detector", {}),
-            (pub, "pub", {"linger": 0}),
-            (sub, "sub", {"linger": 0}),
+            (client_sock, "client_sock", {}),
         ):
             if resource is None:
                 continue
@@ -650,10 +592,6 @@ def main(argv: Optional[list[str]] = None) -> int:
                 closer(**kwargs)
             except Exception as e:  # noqa: BLE001
                 log.debug("%s.close: %s", name, e)
-        if recv_thread is not None and recv_thread.is_alive():
-            recv_thread.join(timeout=2.0)
-        if zmq_ctx is not None:
-            zmq_ctx.term()
         log.info(
             "mp_server exited (frames_published=%d avg_fps=%.1f)",
             frames_published, fps.fps(),

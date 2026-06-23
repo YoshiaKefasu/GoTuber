@@ -37,8 +37,6 @@ This project uses the following open-source libraries. See
   - MediaPipe Face Landmarker model (.task) — Apache-2.0
     (assets/models/face_landmarker.task bundled binary)
   - opencv-python 4.10.0+ — Apache-2.0 (mediapipe の transitive dependency)
-  - pebbe/zmq4 — MIT (https://github.com/pebbe/zmq4)
-  - pyzmq 26.0+ — BSD-3-Clause (https://github.com/zeromq/pyzmq)
 
 The Python tool `tools/slice_character_sheets.py` is MIT-licensed and
 inherited from [tomari-guruguru](https://github.com/rotejin/tomari-guruguru).
