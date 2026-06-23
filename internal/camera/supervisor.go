@@ -142,6 +142,7 @@ type Supervisor struct {
 	mode         CameraMode // 1秒タイマー判定後に更新
 	lastDetected float64    // Unix 秒、最後の顔検出成功時刻
 	faceDetected bool       // 顔検出状態 (1秒タイマーで判定)
+	faceLostTicks int       // Phase 2.10.5: 顔未検出連続 tick 数 (grace 用)
 
 	// 起動・終了制御
 	loopCtx context.Context
@@ -158,6 +159,7 @@ type Supervisor struct {
 	smoothedYaw   float64
 	smoothedPitch float64
 	smoothingInit bool // 最初の 1 フレームは raw 値をそのまま代入 (EMA 初期化)
+	cellLogCount  int  // Phase 2.10.5: debug log 用カウンタ (60Hz で 1 秒ごと出力)
 
 	// Phase 2.7: mp_server.py サブプロセス管理。
 	mpServerCmd        *exec.Cmd
@@ -439,16 +441,27 @@ func (s *Supervisor) tickDetectionSnapshot(dr DetectionResult, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Phase 2.10.5: faceLostTicks — 顔未検出連続 tick 数をカウント。
+	// 1秒 timeout 内でも、一瞬の検出途切れで即 mouse に飛ばすのを防ぐ grace。
+	const faceLostGraceTicks = 5 // 60Hz で 5 ticks = ~83ms の grace
+
 	if detected {
 		s.lastDetected = nowUnix
 		s.faceDetected = true
+		s.faceLostTicks = 0
 	} else {
 		// 1秒タイムアウト判定: now - lastDetected < 1.0
-		// 注: lastDetected がゼロ値 (一度も顔検出していない) のときは false。
 		if s.lastDetected > 0 && nowUnix-s.lastDetected < faceDetectionTimeoutSec {
 			s.faceDetected = true
+			s.faceLostTicks = 0
 		} else {
-			s.faceDetected = false
+			s.faceLostTicks++
+			// grace 期間中は直前の faceDetected を維持
+			if s.faceLostTicks <= faceLostGraceTicks {
+				s.faceDetected = true
+			} else {
+				s.faceDetected = false
+			}
 		}
 	}
 
@@ -467,21 +480,31 @@ func (s *Supervisor) tickDetectionSnapshot(dr DetectionResult, ok bool) {
 // game パッケージに公開する。顔未検出 / 最新値なしの場合は ok=false を保存し、game 側は
 // mouse.Cell() にフォールバックする。
 //
-// Phase 2.10.4: raw yaw/pitch に EMA smoothing を適用してから mapper に渡す。
-// α = 0.25 (前回値 75% + 新規値 25%) で 60Hz 換算 ~0.3 秒の時定数。
+// Phase 2.10.5: 実機トラッキング安定化。
+//   - EMA smoothing α=0.18 (前回値 82% + 新規値 18%) で 60Hz 換算 ~0.45 秒の時定数
+//   - deadzone: |yaw| < 3° or |pitch| < 3° → 0 扱い (正面付近の微振動を殺す)
+//   - debug log: 1秒ごとに raw/smoothed 値を出力
 func (s *Supervisor) tickCell(dr DetectionResult, ok bool) {
 	if !ok || !dr.FaceDetected {
 		s.cellPtr.Store(&cellState{ok: false})
 		return
 	}
 
-	const smoothingAlpha = 0.25
-
+	// Phase 2.10.5: deadzone — 正面付近の微小ノイズを 0 に丸める。
+	// これにより中央セル (row=2, col=2) 付近の痙攣が大幅に軽減される。
+	const deadzoneDeg = 3.0
 	yaw := dr.Yaw
 	pitch := dr.Pitch
+	if yaw > -deadzoneDeg && yaw < deadzoneDeg {
+		yaw = 0
+	}
+	if pitch > -deadzoneDeg && pitch < deadzoneDeg {
+		pitch = 0
+	}
 
-	// Phase 2.10.4: EMA smoothing。
-	// 最初の 1 フレームは raw 値をそのまま代入して初期化。
+	// Phase 2.10.5: EMA smoothing — α=0.18 で少し強めに平滑化。
+	const smoothingAlpha = 0.18
+
 	if !s.smoothingInit {
 		s.smoothedYaw = yaw
 		s.smoothedPitch = pitch
@@ -498,6 +521,20 @@ func (s *Supervisor) tickCell(dr DetectionResult, ok bool) {
 	}
 	eyesClosed := s.blinkFilter.Update(dr.EarLeft, dr.EarRight) == BlinkClosed
 	s.cellPtr.Store(&cellState{row: row, col: col, eyesClosed: eyesClosed, ok: true})
+
+	// Phase 2.10.5: debug log — 1秒ごとに raw/smoothed/cell を出力。
+	// rawYaw は deadzone 適用前、smoothedYaw は EMA 適用後の値。
+	s.cellLogCount++
+	if s.cellLogCount >= 60 { // 60Hz → 1秒ごと
+		s.cellLogCount = 0
+		log.Printf(
+			"camera: debug cell: raw=(%.1f,%.1f) smooth=(%.1f,%.1f) cell=(r%d,c%d) deadzone=%.0f° alpha=%.2f",
+			dr.Yaw, dr.Pitch,
+			s.smoothedYaw, s.smoothedPitch,
+			row, col,
+			deadzoneDeg, smoothingAlpha,
+		)
+	}
 }
 
 // switchToCameraLocked は mouse mode → camera mode 切替 (mu 保護下前提)。
@@ -523,6 +560,8 @@ func (s *Supervisor) switchToMouseLocked() {
 	// Phase 2.10.4: camera → mouse 切替時に smoothing 状態をリセット。
 	// 次回 camera 復帰時に stale な smoothed 値を引き継がないため。
 	s.smoothingInit = false
+	s.faceLostTicks = 0
+	s.cellLogCount = 0
 	log.Printf("camera: supervisor: mode → Mouse (face lost or timeout)")
 }
 

@@ -211,10 +211,10 @@ def _create_landmarker(model_path: Path, log: logging.Logger) -> Any:
         running_mode=mp.tasks.vision.RunningMode.IMAGE,
         num_faces=1,
         output_face_blendshapes=False,
-        output_facial_transformation_matrixes=False,
+        output_facial_transformation_matrixes=True,
     )
     log.info(
-        "Creating FaceLandmarker (IMAGE mode, num_faces=1) from %s",
+        "Creating FaceLandmarker (IMAGE mode, num_faces=1, transform_matrix=True) from %s",
         model_path,
     )
     return mp.tasks.vision.FaceLandmarker.create_from_options(options)
@@ -318,6 +318,48 @@ def _compute_head_pose(
     return float(np.degrees(yaw)), float(np.degrees(pitch)), float(np.degrees(roll))
 
 
+def _compute_head_pose_from_matrix(
+    matrix_4x4: Any,
+) -> tuple[float, float, float, str]:
+    """Extract yaw/pitch/roll from MediaPipe 4x4 facial transformation matrix.
+
+    Phase 2.10.6: MediaPipe が返す 4x4 変換行列 (face-local → camera space) から
+    Euler 角を抽出する。3点 solvePnP より安定し、正面付近のバイアスが少ない。
+
+    MediaPipe 座標系: X-right, Y-up, Z-towards-camera.
+    Upper-left 3x3 が回転行列 R。
+
+    Returns:
+        (yaw, pitch, roll, source) — source は "transform_matrix" or "solvepnp_fallback"
+    """
+    import math
+
+    try:
+        import numpy as np
+
+        if matrix_4x4 is None:
+            return 0.0, 0.0, 0.0, "solvepnp_fallback"
+
+        m = np.asarray(matrix_4x4, dtype=np.float64)
+        if m.shape != (4, 4):
+            return 0.0, 0.0, 0.0, "solvepnp_fallback"
+
+        # Upper-left 3x3 = rotation matrix
+        r = m[:3, :3]
+
+        # Euler angle extraction (MediaPipe coords: X-right, Y-up, Z-towards-camera)
+        # Yaw (Y-axis rotation): face left/right
+        yaw = math.atan2(-r[2, 0], math.sqrt(r[0, 0] * r[0, 0] + r[1, 0] * r[1, 0]))
+        # Pitch (X-axis rotation): face up/down
+        pitch = math.atan2(r[2, 1], r[2, 2])
+        # Roll (Z-axis rotation): head tilt
+        roll = math.atan2(r[1, 0], r[0, 0])
+
+        return float(np.degrees(yaw)), float(np.degrees(pitch)), float(np.degrees(roll)), "transform_matrix"
+    except Exception:
+        return 0.0, 0.0, 0.0, "solvepnp_fallback"
+
+
 def _compute_ear(landmarks_px: Any, eye: str) -> float:
     """Eye Aspect Ratio: vertical eyelid / horizontal canthus width.
 
@@ -367,12 +409,12 @@ def build_detection_message(
     landmarks_px: Optional[Any],
     frame_shape: tuple[int, int, int],
     timestamp: float,
+    facial_matrix: Optional[Any] = None,
 ) -> dict[str, Any]:
     """Build the JSON detection dict per PHASE2.md Section 4.3.
 
-    When landmarks_px is None (no face) all numeric fields are zero-filled
-    so the Go side always sees a consistent schema (Phase 2.7 maps a
-    sustained face_detected=False to the mouse-follow fallback).
+    Phase 2.10.6: facial_matrix (4x4 transformation matrix) が渡された場合は
+    それを優先して yaw/pitch/roll を抽出。无ければ 3点 solvePnP にフォールバック。
     """
     h, w = frame_shape[:2]
     if landmarks_px is None:
@@ -386,12 +428,23 @@ def build_detection_message(
             "face_center_x": 0.0, "face_center_y": 0.0,
         }
 
-    yaw, pitch, roll = _compute_head_pose(landmarks_px, frame_shape)
+    # Phase 2.10.6: matrix 優先 → solvePnP fallback
+    yaw, pitch, roll = 0.0, 0.0, 0.0
+    pose_source = "solvepnp_fallback"
+    if facial_matrix is not None:
+        yaw, pitch, roll, pose_source = _compute_head_pose_from_matrix(facial_matrix)
+    if pose_source == "solvepnp_fallback":
+        yaw, pitch, roll = _compute_head_pose(landmarks_px, frame_shape)
 
     # Phase 2.10.4: OpenCV camera frame (Y-down) では
     # 下を向く = pitch positive, 上を向く = pitch negative。
     # Go mapper (PitchToRow) は +20° = 上 (row 0) 前提のため符号を反転する。
     pitch = -pitch
+
+    # Phase 2.10.7: webcam preview は鏡像として認識されることが多い。
+    # 実機では「左を向くとキャラが右を向く」現象が出たため、yaw を反転して
+    # ユーザー体感の左右とキャラの左右を一致させる。
+    yaw = -yaw
 
     ear_left = _compute_ear(landmarks_px, eye="left")
     ear_right = _compute_ear(landmarks_px, eye="right")
@@ -405,6 +458,7 @@ def build_detection_message(
         "yaw": yaw, "pitch": pitch, "roll": roll,
         "ear_left": ear_left, "ear_right": ear_right,
         "face_center_x": cx, "face_center_y": cy,
+        "_pose_source": pose_source,
     }
 
 
@@ -568,9 +622,15 @@ def main(argv: Optional[list[str]] = None) -> int:
             else:
                 landmarks_px = None
 
+            # Phase 2.10.6: transformation matrix を取り出し (あれば)。
+            facial_matrix = None
+            if result.facial_transformation_matrixes:
+                facial_matrix = result.facial_transformation_matrixes[0]
+
             msg = build_detection_message(
                 seq=seq, landmarks_px=landmarks_px,
                 frame_shape=frame.shape, timestamp=timestamp,
+                facial_matrix=facial_matrix,
             )
             try:
                 assert client_sock is not None
@@ -595,9 +655,10 @@ def main(argv: Optional[list[str]] = None) -> int:
 
             if args.debug and seq % _FPS_DEBUG_INTERVAL == 0:
                 log.debug(
-                    "seq=%d fps=%.1f face=%s yaw=%.1f pitch=%.1f",
+                    "seq=%d fps=%.1f face=%s yaw=%.1f pitch=%.1f source=%s",
                     seq, fps.fps(), msg["face_detected"],
                     msg["yaw"], msg["pitch"],
+                    msg.get("_pose_source", "?"),
                 )
 
     except KeyboardInterrupt:

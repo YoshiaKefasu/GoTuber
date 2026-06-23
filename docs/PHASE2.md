@@ -395,7 +395,7 @@ Phase 2.10 ではこれを次のように解消した:
 - [ ] Windows 実機で `bin/gotuber-camera.exe` を起動し、Tweaks panel に Camera セクションが表示
 - [ ] Windows 実機で `mp_server.py` が webcam capture + MediaPipe 推論を実行
 
-### Phase 2.10.2: Python sidecar 完全自動化 (2026-06-23, 🔜 次)
+### Phase 2.10.2: Python sidecar 完全自動化 (2026-06-23, ✅ 実装完了)
 
 > **背景**: Windows 実機テストで `cv2` 未導入時は `mp_server.py` が即死し、
 > 手動で `python -m venv .venv-mp` → `pip install -r tools/requirements-mp.txt` が必要だった。
@@ -424,12 +424,67 @@ Phase 2.10 ではこれを次のように解消した:
 
 #### 完了条件
 
-- [ ] `.venv-mp` が無い Windows 環境で `bin/gotuber-camera.exe` 起動 → venv 自動作成開始
-- [ ] 依存導入後、同じ起動フローの中で `mp_server.py` が自動起動する
-- [ ] `pythonExecutable()` が PATH の `python.exe` より `.venv-mp` を優先する
-- [ ] `Preparing metadata (pyproject.toml)` の長時間待ちが setup script 側で緩和される
-- [ ] 既に `.venv-mp` がある場合は再インストールせず即起動する
-- [ ] `--force` 相当の再構築手段が用意される
+- [x] `.venv-mp` が無い Windows 環境で `bin/gotuber-camera.exe` 起動 → venv 自動作成開始
+- [x] 依存導入後、同じ起動フローの中で `mp_server.py` が自動起動する
+- [x] `pythonExecutable()` が PATH の `python.exe` より `.venv-mp` を優先する
+- [x] `Preparing metadata (pyproject.toml)` の長時間待ちが setup script 側で緩和される (`pip wheel setuptools` 先行更新 + `--prefer-binary`)
+- [x] 既に `.venv-mp` がある場合は再インストールせず即起動する
+- [x] `--force` 相当の再構築手段が用意される
+
+### Phase 2.10.3: runtime 起動性改善 (2026-06-23, ✅ 実装完了)
+
+- `mp_server.py` の stdout / stderr を Go 側ログへ中継
+- `mp_server.py` 連続即死時に fail count が 1 に戻る問題を修正
+- 初回 auto-setup (`pip install`) を mutex 外へ移し、`Stop()` の graceful shutdown を妨げないようにした
+
+### Phase 2.10.4: MediaPipe 初期化修正 + first-frame 検証 (2026-06-23, ✅ 実装完了)
+
+- `mp.tasks.python.BaseOptions` → `mp.tasks.BaseOptions` に修正
+- `cv2.VideoCapture(...).isOpened()` だけでなく、**最初の 1 フレーム取得成功** を必須化
+- camera 起動ログを `Camera 0 opened and first frame acquired (WxH)` へ強化
+- `pitch = -pitch` の符号補正を追加
+- yaw / pitch に EMA smoothing (`alpha=0.18`) を追加
+- カメラ解像度は 1280×720 を request し、**実フレーム shape を真実**として扱う
+
+### Phase 2.10.5: 実機キャリブレーション調整 (2026-06-23, ✅ 初回反映完了)
+
+> **現状**: Windows 実機で、camera 起動 / first frame / FaceLandmarker 作成 / face detected までは成功している。
+> ただし visual test では、**正面でもキャラが上向き寄りに見える**、**小刻みな揺れが残る**、
+> ときどき **`Camera: Lost Signal`** へ落ちる症状を確認している。
+
+#### 実機で確認できた事実
+
+- `Camera 0 opened and first frame acquired (640x480)` → その後 1280×720 request 実装済み
+- `Creating FaceLandmarker ...` → MediaPipe 初期化成功
+- `mode → Camera (face detected)` → camera mode への遷移成功
+- にもかかわらず、キャラ表示は **上向き固定寄り / 痙攣っぽい揺れ** が残る
+- UI 上は `Camera: Lost Signal` / `Camera: Down` の遷移を確認
+
+#### いま未解決のもの
+
+- pose 推定値 (特に pitch) の **実機キャリブレーション不足** → deadzone / smoothing / grace を投入済み
+- EMA smoothing だけでは抑えきれない **セル切替ノイズ** → `alpha=0.18` + deadzone 3° へ調整済み
+- 顔検出継続性と `Lost Signal` 判定の **境界調整** → 5 ticks grace を投入済み
+
+#### 次に詰める候補
+
+- yaw / pitch の deadzone / clamp 調整 ✅
+- smoothing 係数の実機最適化 ✅
+- pose 基準点 / solvePnP パラメータの見直し → **Phase 2.10.6 で matrix 優先へ切替**
+- `Lost Signal` へ落ちる条件のログ追加と閾値再調整 ✅
+
+### Phase 2.10.6: MediaPipe transformation matrix 優先 pose 推定 (2026-06-23, ✅ 実装完了)
+
+- `output_facial_transformation_matrixes=True` を有効化
+- facial transformation matrix の左上 3×3 回転行列から yaw / pitch / roll を抽出
+- 3点 solvePnP は fallback に格下げ
+- 実機比較で、matrix 出力は妥当な値、solvePnP は `pitch=+132°` など破綻値を返すことを確認
+
+### Phase 2.10.7: yaw ミラー補正 (2026-06-23, ✅ 実装完了)
+
+- 実機で「左を向くとキャラが右を向く」ことを確認
+- webcam preview の鏡像体感に合わせ、`yaw = -yaw` を追加
+- これでユーザーの左右感覚とキャラの左右を一致させる
 
 ---
 

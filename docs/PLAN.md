@@ -399,7 +399,10 @@ YAML 読み込み後、**フェイルファスト** で以下を検証：
 | 1.13a | マイク選択 + TOML 永続化 | 4-5 日 | 🔜 予定 (Phase 1.13b 後) |
 | 1.13b | UI 非表示ショートカット (`Ctrl+Shift+H`) | 1 日 | 🔜 予定 (1.13a の前) |
 | 2 | Camera 入力 | 2〜3 週 | **確定 (2026-06-17) / 2026-06-23 改訂**: MediaPipe Face Landmarker 即採用 (Python サイドカー + localhost TCP JSONL)。Phase 1 ビルドサイズ不変 |
-| 2.10.2 | Python sidecar 完全自動化 | 0.5〜1 日 | 🔜 予定: `.venv-mp` 自動作成 / 自動依存導入 / 自動起動 |
+| 2.10.2 | Python sidecar 完全自動化 | 0.5〜1 日 | ✅ 実装完了: `.venv-mp` 自動作成 / 自動依存導入 / 自動起動 |
+| 2.10.5 | 実機キャリブレーション調整 | 0.5〜1 日 | ✅ 初回反映完了: deadzone / smoothing / grace 追加 |
+| 2.10.6 | transformation matrix 優先 pose 推定 | 0.5 日 | ✅ 実装完了: solvePnP fallback 化 |
+| 2.10.7 | yaw ミラー補正 | 0.1 日 | ✅ 実装完了: 左右向きの体感一致 |
 | 3 | VMC Protocol 出力 | 1〜2 週 | 未着手 |
 
 各フェーズのゴール・実装項目・DoD・工数等の詳細は対応するファイル参照。
