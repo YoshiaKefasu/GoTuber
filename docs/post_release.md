@@ -5,9 +5,11 @@
 
 ## 🔴 高優先度: ワークフロー自動化
 
-### 1. キャラ生成ワークフローの 1 コマンド化
+### 1. キャラ生成ワークフローの 1 コマンド化（上級者向け / Phase 3 後）
 
 **目的**: ユーザー (配信者) が AI で生成した 6 枚 (A〜F) の green screen PNG を、**chromakey 透過 → 2x x 2 アップスケール (4500×4500) → 5×5 スライス** を **1 コマンドで** 透過済 150 枚 WebP に変換し、`assets/characters/_default/` まで配置する。
+
+**位置づけ**: Phase 3 の Creator Tools は「1 枚入力 → A 25 枚 → マスク → AI 補完」を初回ユーザー向けの本道にする。この TODO は、すでに A〜F 6 枚を用意できる上級者向けのフル自動パイプラインとして post-release に残す。
 
 **現在のワークフロー** (yosia さんが手作業で実行した 6 ステップ):
 
@@ -141,7 +143,76 @@ python tools/build_default_character.py <入力フォルダ> \
 
 ## 🟡 中優先度
 
-### 2. chroma key 閾値の改善
+### 2. GoTuber Character Format v1
+
+**目的**: GoTuber 用キャラクター素材の標準フォーマットを明文化し、Creator Tools / 手作業 / AI 生成のどの経路でも同じ構造へ着地できるようにする。
+
+**背景**: 現在の runtime は `A-F` × `5x5` の 150 枚を読む。Phase 3 Creator Tools では、まず A 25 枚を作り、マスクと AI 補完で B〜F を作る。将来の拡張表情や配布用 character pack を扱うには、キャラ素材の標準フォーマットを先に固める必要がある。
+
+**想定フォーマット**:
+
+```text
+character/
+  character.yaml
+  A/r0c0.webp ... r4c4.webp
+  B/r0c0.webp ... r4c4.webp
+  C/r0c0.webp ... r4c4.webp
+  D/r0c0.webp ... r4c4.webp
+  E/r0c0.webp ... r4c4.webp
+  F/r0c0.webp ... r4c4.webp
+  masks/
+    eyes_brows/r0c0.png ... r4c4.png
+    mouth/r0c0.png ... r4c4.png
+  metadata/
+    prompts.md
+    source_notes.md
+```
+
+**DoD**:
+
+- `character.yaml` v1 の必須項目 / 任意項目を定義
+- A〜F 150 枚、マスク、metadata の配置規約を定義
+- `tools/gotuber_creator.py validate` がこの形式を検証できる
+- README / 新キャラ差し替え手順から参照できる
+
+**工数**: 0.5〜1 日
+
+### 3. Expression Trigger System
+
+**目的**: `>.<` などの追加表情セットを、MediaPipe の口開き・瞬き・顔向き・ホットキーなどで切り替えられるようにする。
+
+**背景**: Phase 2 で MediaPipe から顔向き・瞬きが取れるようになった。将来的には「口を大きく開けたら `>.<`」「強く目を閉じたら `ぎゅっ`」のようなリアクション表情を GoTuber 内で完結させたい。
+
+**想定ルール例**:
+
+```yaml
+expressions:
+  x_x:
+    basePath: expressions/x_x
+    trigger:
+      cameraMouthOpen: high
+      minDurationMs: 120
+      holdMs: 800
+```
+
+**トリガー候補**:
+
+- `cameraMouthOpen`: MediaPipe の mouth ratio / MAR
+- `eyeClosed`: EAR blink filter
+- `headPitch` / `headYaw`: 顔向き
+- hotkey
+- manual button in Tweaks
+
+**DoD**:
+
+- 拡張表情セットの配置規約を定義
+- trigger YAML の最小仕様を定義
+- 通常 A〜F 表情と追加表情の優先順位を定義
+- `>.<` 表情セットをサンプル仕様として docs 化
+
+**工数**: 1〜2 日
+
+### 4. chroma key 閾値の改善
 
 **問題**: 現状の `apply_green_key.py` の閾値 80 では、AI 生成画像の**髪や服の周辺の微妙な緑 (RGB ~90-120)** が透過されない。
 
@@ -159,7 +230,7 @@ python tools/build_default_character.py <入力フォルダ> \
 
 **工数**: 30 分
 
-### 3. ドキュメント整合性
+### 5. ドキュメント整合性
 
 **問題**: キャラ作成手順が複数ファイルに分散している。
 
@@ -178,7 +249,7 @@ python tools/build_default_character.py <入力フォルダ> \
 
 **工数**: 30 分
 
-### 4. AI 再生成時の背景純白 / 純緑強制プロンプト
+### 6. AI 再生成時の背景純白 / 純緑強制プロンプト
 
 **問題**: AI が「グレー背景」と言っても実際は (137, 139, 149) のような**微妙に色味のあるグレー**を生成。chroma key や 4 隅サンプル方式でも完全除去困難。
 
@@ -196,7 +267,7 @@ python tools/build_default_character.py <入力フォルダ> \
 
 ## 🟢 低優先度 (改善)
 
-### 5. 元 tomari-guruguru データの復元
+### 7. 元 tomari-guruguru データの復元
 
 **問題**: 作業中、`assets/characters/_default/` の 150 枚 (元 tomari 由来) を誤って全削除。`A:\Temp\opencode\_default_backup_*` 退避は 0 枚だった (私の手順バグ)。
 
@@ -210,7 +281,7 @@ python tools/build_default_character.py <入力フォルダ> \
 
 **工数**: 10 分 (コピーだけ)
 
-### 6. Phase 1.10 視覚テスト
+### 8. Phase 1.10 視覚テスト
 
 **問題**: Phase 1.10 完了後も実機起動テスト未実施。yosia さんの `bin/gotuber.exe` 起動で初めて全機能の動作確認予定。
 
@@ -231,7 +302,7 @@ python tools/build_default_character.py <入力フォルダ> \
 
 **工数**: 10 分 (yosia さんの手動テスト)
 
-### 7. スライスツールのテスト追加
+### 9. スライスツールのテスト追加
 
 **問題**: `tools/slice_character_sheets.py` は yosia さんから MIT 継承した 648 行のスクリプト。テスト未追加。
 
@@ -245,7 +316,7 @@ python tools/build_default_character.py <入力フォルダ> \
 
 **工数**: 1-2 時間 (テスト作成)
 
-### 8. DirectML パスの復活 (オプション)
+### 10. DirectML パスの復活 (オプション)
 
 **問題**: `tools/upscale_2x.py` の DirectML パスを試したが、RTX 2060 で `D3D12_ERROR_REMOVED_DEVICE` (887A0020) が出て CPU フォールバックした。
 
@@ -284,13 +355,15 @@ python tools/build_default_character.py <入力フォルダ> \
 
 ## 進捗
 
-- [ ] 1. ワークフロー自動化 (`tools/build_default_character.py`)
-- [ ] 2. chroma key 閾値改善
-- [ ] 3. ドキュメント整合性
-- [ ] 4. AI 再生成プロンプト改善
-- [ ] 5. 元データ復元 (必要なら)
-- [ ] 6. Phase 1.10 視覚テスト
-- [ ] 7. スライスツールテスト追加
-- [ ] 8. DirectML パス復活
+- [ ] 1. ワークフロー自動化 (`tools/build_default_character.py`、上級者向け / Phase 3 後)
+- [ ] 2. GoTuber Character Format v1
+- [ ] 3. Expression Trigger System
+- [ ] 4. chroma key 閾値改善
+- [ ] 5. ドキュメント整合性
+- [ ] 6. AI 再生成プロンプト改善
+- [ ] 7. 元データ復元 (必要なら)
+- [ ] 8. Phase 1.10 視覚テスト
+- [ ] 9. スライスツールテスト追加
+- [ ] 10. DirectML パス復活
 
-最終更新: 2026-06-16
+最終更新: 2026-06-24
