@@ -27,7 +27,7 @@ SOFTWARE.
 This project uses the following open-source libraries. See
 [tools/LICENSE-third-party](tools/LICENSE-third-party) for the full list.
 
-- Ebitengine v2.9.9 — MIT (https://github.com/hajimehoshi/ebiten)
+- Ebitengine v2.9.9 — Apache-2.0 (https://github.com/hajimehoshi/ebiten)
 - malgo v0.11.25 — Unlicense (https://github.com/gen2brain/malgo)
 - ebitenui v0.7.3 — MIT (https://github.com/ebitenui/ebitenui)
 - golang.org/x/image v0.42.0 — BSD-3-Clause (https://pkg.go.dev/golang.org/x/image)

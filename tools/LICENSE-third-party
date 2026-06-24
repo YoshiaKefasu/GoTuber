@@ -13,7 +13,7 @@ GoTuber は以下のオープンソースソフトウェアを利用していま
 - **用途**: 2D ゲームエンジン (描画 + 入力 + 透過ウィンドウ)
 
 ### github.com/gen2brain/malgo — v0.11.25
-- **License**: Apache License 2.0
+- **License**: Unlicense (public domain)
 - **URL**: https://github.com/gen2brain/malgo
 - **用途**: ミニオーディオバインディング (CGo, マイクキャプチャ)
 

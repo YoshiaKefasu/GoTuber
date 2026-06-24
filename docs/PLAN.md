@@ -388,7 +388,7 @@ YAML 読み込み後、**フェイルファスト** で以下を検証：
 | 2.10.5 | 実機キャリブレーション調整 | 0.5〜1 日 | ✅ 初回反映完了: deadzone / smoothing / grace 追加 |
 | 2.10.6 | transformation matrix 優先 pose 推定 | 0.5 日 | ✅ 実装完了: solvePnP fallback 化 |
 | 2.10.7 | yaw ミラー補正 | 0.1 日 | ✅ 実装完了: 左右向きの体感一致 |
-| 3 | Creator Tools | 1〜2 週 | 未着手 |
+| 3 | Creator Tools | 1〜2 週 | **Phase 3.0 仕様固定中** (2026-06-24) |
 
 各フェーズのゴール・実装項目・DoD・工数等の詳細は対応するファイル参照。
 

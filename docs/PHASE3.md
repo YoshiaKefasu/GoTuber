@@ -1,6 +1,6 @@
 # GoTuber — Phase 3: Creator Tools 詳細設計
 
-> **ステータス**: 未着手（Phase 2 完了後に着手）
+> **ステータス**: Phase 3.0 仕様固定完了（2026-06-24）
 > **最終更新**: 2026-06-24
 > **親プラン**: [PLAN.md](./PLAN.md) v0.4.7
 
@@ -96,6 +96,7 @@ Phase 3 の CLI は、最初から 150 枚を作らない。
 ```powershell
 python tools/gotuber_creator.py build-a \
   --input input/main.png \
+  --character my-character \
   --output output/my-character
 ```
 
@@ -210,7 +211,7 @@ output/my-character/final/
 ### 6.1 `build-a`
 
 ```powershell
-python tools/gotuber_creator.py build-a --input input/main.png --output output/my-character
+python tools/gotuber_creator.py build-a --input input/main.png --character my-character --output output/my-character
 ```
 
 A 25 枚を作る。
@@ -243,12 +244,155 @@ python tools/gotuber_creator.py preview-manifest --input output/my-character
 
 ## 7. 実装フェーズ
 
-### Phase 3.0: 仕様固定
+### Phase 3.0: 仕様固定（このドキュメントが source of truth）
 
-- A 25 枚先行方式を仕様化
-- `output/my-character/` の中間ディレクトリ構造を固定
-- マスク命名規則を固定
-- レビュー PNG の色（赤）を固定
+Phase 3.0 はコード実装ではなく、**仕様の固定**に焦点を当てる。
+以下の仕様が確定したら Phase 3.1 以降の実装に進む。
+
+#### 3.0.1 A 25 枚先行方式
+
+GoTuber のランタイムは A-F × 5×5 = 150 枚を読むが、
+Phase 3.0 は **A 状態（目開き + 口閉じ）の 25 枚だけを先に作る**。
+
+理由:
+- 初回ユーザーは「6 枚の表情シートを全部 AI で作る」負担が重い
+- 1 枚のメイン画像から A 25 枚を作れば、GoTuber で最低限動作確認できる
+- A 25 枚を高品質化してから B〜F を Inpaint で作る方が、画質の破綻が少ない
+
+#### 3.0.2 出力ディレクトリ構造
+
+```
+output/my-character/
+├── A/                          # Phase 3.1 で生成
+│   ├── r0c0.webp
+│   ├── r0c1.webp
+│   ├── ...
+│   └── r4c4.webp
+├── masks/                      # Phase 3.2 で生成
+│   ├── eyes_brows/             # 目と眉毛マスク（白=対象外、黒=対象）
+│   │   ├── r0c0.png
+│   │   ├── ...
+│   │   └── r4c4.png
+│   ├── mouth/                  # 口マスク（白=対象外、黒=対象）
+│   │   ├── r0c0.png
+│   │   ├── ...
+│   │   └── r4c4.png
+│   └── review/                 # 赤マスク PNG（ユーザー確認用）
+│       ├── r0c0_eyes_brows_review.png
+│       ├── r0c0_mouth_review.png
+│       ├── ...
+│       ├── r4c4_eyes_brows_review.png
+│       └── r4c4_mouth_review.png
+├── A_high/                     # ユーザーが作る A 高品質版（Phase 3.3 で使用）
+│   ├── r0c0.png
+│   ├── ...
+│   └── r4c4.png
+└── final/                      # 最終 150 枚（Phase 3.5 で使用）
+    ├── A/
+    │   └── r0c0.webp ... r4c4.webp
+    ├── B/
+    │   └── r0c0.webp ... r4c4.webp
+    ├── C/
+    │   └── r0c0.webp ... r4c4.webp
+    ├── D/
+    │   └── r0c0.webp ... r4c4.webp
+    ├── E/
+    │   └── r0c0.webp ... r4c4.webp
+    └── F/
+        └── r0c0.webp ... r4c4.webp
+```
+
+#### 3.0.3 マスク命名規則
+
+| マスク種別 | ディレクトリ | ファイル名パターン | 用途 |
+|---|---|---|---|
+| 目眉マスク | `masks/eyes_brows/` | `r{row}c{col}.png` | 目と眉毛を Inpaint する範囲 |
+| 口マスク | `masks/mouth/` | `r{row}c{col}.png` | 口だけを Inpaint する範囲 |
+| 目眉レビュー | `masks/review/` | `r{row}c{col}_eyes_brows_review.png` | ユーザーが目眉マスクの範囲を確認 |
+| 口レビュー | `masks/review/` | `r{row}c{col}_mouth_review.png` | ユーザーが口マスクの範囲を確認 |
+
+マスク仕様:
+- フォーマット: PNG (RGBA)
+- 解像度: 各セル 1200×1200 px（既存 `_default` アセットと同じ。グリッドセルサイズ（アンカーピッチ）は 900 px）
+- 色: **黒 (0,0,0) = マスク対象（Inpaint する範囲）**、**白 (255,255,255) = 保持する範囲**
+- 目眉マスクと口マスクは **原則重ならないこと**。ただし `validate` では重複を検証しない（ユーザー手修正前提の推奨事項）
+- ユーザーがペイントソフトで手修正しやすい単純な PNG にする
+
+#### 3.0.4 レビュー PNG の命名規則と色ルール
+
+レビュー PNG は、マスクの範囲を **赤の半透明オーバーレイ** で視覚化する。
+
+| 項目 | 仕様 |
+|---|---|
+| ファイル名 | `r{row}c{col}_{mask_type}_review.png` |
+| `mask_type` | `eyes_brows` または `mouth` |
+| 赤色 | RGBA (255, 0, 0, 128) — 半透明赤 |
+| 合成方法 | 元画像の上に赤マスクを重ねる |
+| 用途 | ユーザーが「この範囲が Inpaint される」ことを確認 |
+
+レビュー PNG の生成ロジック:
+1. 元画像 `A/r{row}c{col}.webp` を読み込む
+2. マスク画像 `masks/{type}/r{row}c{col}.png` を読み込む
+3. マスクが黒のピクセルに赤 (255,0,0,128) をオーバーレイ
+4. `masks/review/r{row}c{col}_{type}_review.png` として保存
+
+#### 3.0.5 validate の最小要件
+
+`validate` コマンドは最終的な 150 枚が GoTuber の読み込み仕様に合致するかを検証する。
+
+検証項目（全てパスしたら OK）:
+
+| # | 検証内容 | エラー例 |
+|---|---|---|
+| 1 | `final/` に A〜F の 6 ディレクトリが存在する | `final/D/ がない` |
+| 2 | 各ディレクトリに `r{0-4}c{0-4}.webp` が 25 枚存在する | `A/r2c3.webp がない` |
+| 3 | 各ファイルのサイズが 1200×1200 px | `A/r0c0.webp が 800×800` |
+| 4 | 各ファイルが WebP フォーマット | `A/r0c0.png は WebP でない` |
+| 5 | 各ファイルに透明 alpha チャネルが含まれる | `A/r0c0.webp が RGB のみ` |
+
+出力:
+- 全パス: `OK: 150 files validated` + exit 0
+- 失敗: `ERROR: ...` + exit 1
+
+#### 3.0.6 既存ランタイムとの互換性
+
+Phase 3.0 で固定する仕様は、既存の GoTuber ランタイム（Phase 1/2）と **完全に互換** である:
+
+- ファイル命名 `A/r{row}c{col}.webp` は `internal/character/atlas.go` が読む形式と同一
+- ディレクトリ構造 `A-F/` は `config/default.yaml` の `sheets` 設定と整合
+- WebP フォーマットは `golang.org/x/image/webp` でデコード可能
+- 1200×1200 px は既存アセットと同じサイズ（グリッドセルサイズ 900 px はアンカーピッチ）
+
+Phase 3.0 の仕様固定は **GoTuber 本体のコードを一切変更しない**。
+
+#### 3.0.7 キャラクター名による出力ディレクトリ管理
+
+Creator Tools CLI は `--character <name>` オプションでキャラクター名を受け取る。
+出力ディレクトリは `output/<character-name>/` になる。
+
+```powershell
+python tools/gotuber_creator.py build-a \
+  --input input/main.png \
+  --character my-character \
+  --output output/my-character
+```
+
+仕様:
+- `--character` は省略可能。省略時は `--output` で指定したディレクトリをそのまま使う
+- デフォルトキャラクター名は `_default`（既存ランタイムの `assets/characters/_default/` と整合）
+- 将来 GoTuber メインアプリにキャラクター選択 UI/設定を追加する際の前提とする
+- キャラクター切り替え自体は Phase 3 のスコープ外。**仕様固定のみ**
+
+#### 3.0.8 サンプルキャラクターのライセンス
+
+Phase 3 で提供するサンプルキャラクター画像（`assets/characters/_default/`）の利用条件:
+
+- **動作検証・テスト利用**: 自由（GoTuber の動作確認用）
+- **動画/配信利用**: yosia の明示許可が必要
+- **再配布禁止**: サンプル画像をそのまま再配布しない
+- **改変利用**: ユーザーが独自に改変した結果物の利用は自由（ただし元画像の再配布は不可）
+
+> **注意**: サンプル画像は GoTuber の動作確認用。配信で使用する場合は yosia に許可を求めるか、ユーザー自身のキャラクター画像を用意すること。
 
 ### Phase 3.1: `build-a` CLI
 
