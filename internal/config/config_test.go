@@ -161,9 +161,10 @@ func TestConfig_SaveCreatesDirectory(t *testing.T) {
 	}
 }
 
-// TestConfig_TweaksRoundTrip は Tweaks 4 フィールドが TOML 経由で完全に保存・復元できることを確認 (Phase 1.14.16)。
+// TestConfig_TweaksRoundTrip は Tweaks 5 フィールドが TOML 経由で完全に保存・復元できることを確認 (Phase 1.14.16 + Phase 2.10.8)。
 //
 // Phase 1.14.16 (Critical #2 fix): BlinkEnabled / MouthEnabled は *bool として保存される。
+// Phase 2.10.8: CameraEnabled を追加。
 func TestConfig_TweaksRoundTrip(t *testing.T) {
 	withTempConfigHome(t)
 
@@ -176,6 +177,7 @@ func TestConfig_TweaksRoundTrip(t *testing.T) {
 			BlinkEnabled:        &trueVal,
 			MouthEnabled:        &falseVal,
 			MicSensitivity:      12.5,
+			CameraEnabled:       &falseVal,
 		},
 	}
 	if err := original.Save(); err != nil {
@@ -201,6 +203,9 @@ func TestConfig_TweaksRoundTrip(t *testing.T) {
 	if loaded.Tweaks.MicSensitivity != 12.5 {
 		t.Errorf("tweaks.mic_sensitivity: got %v want 12.5", loaded.Tweaks.MicSensitivity)
 	}
+	if loaded.Tweaks.CameraEnabled == nil || *loaded.Tweaks.CameraEnabled != false {
+		t.Errorf("tweaks.camera_enabled: got %v want false", loaded.Tweaks.CameraEnabled)
+	}
 }
 
 // TestTweaksConfig_ApplyTo_ZeroValueSkip はゼロ値 / nil (TOML 未設定) が ApplyTo で skip されることを確認 (Phase 1.14.16)。
@@ -208,17 +213,20 @@ func TestConfig_TweaksRoundTrip(t *testing.T) {
 // Phase 1.14.16 (Critical #2 fix): BlinkEnabled / MouthEnabled が nil (TOML キー欠落)
 // のときは State のデフォルト (true / true) を保持する。false の上書きは行わない。
 // これが「初回起動時に口パク OFF にされてしまう」バグを防ぐ肝。
+//
+// Phase 2.10.8: CameraEnabled も nil skip でデフォルト true を保持。
 func TestTweaksConfig_ApplyTo_ZeroValueSkip(t *testing.T) {
-	// デフォルト state (0.3 / true / true / 10.0)
+	// デフォルト state (0.3 / true / true / 10.0 / true)
 	state := &tweaks.State{
 		MouseResponsiveness: 0.3,
 		BlinkEnabled:        true,
 		AudioEnabled:        true,
 		AudioSensitivity:    10.0,
+		CameraEnabled:       true,
 	}
 
 	// 全フィールドゼロ値 / nil の TweaksConfig を ApplyTo
-	tc := &TweaksConfig{} // MouseResponsiveness=0, BlinkEnabled=nil, MouthEnabled=nil, MicSensitivity=0
+	tc := &TweaksConfig{} // MouseResponsiveness=0, BlinkEnabled=nil, MouthEnabled=nil, MicSensitivity=0, CameraEnabled=nil
 	tc.ApplyTo(state)
 
 	// ゼロ値 / nil skip: 全永続化フィールドがデフォルトのまま
@@ -234,19 +242,26 @@ func TestTweaksConfig_ApplyTo_ZeroValueSkip(t *testing.T) {
 	if state.AudioSensitivity != 10.0 {
 		t.Errorf("AudioSensitivity should remain 10.0, got %v", state.AudioSensitivity)
 	}
+	if !state.CameraEnabled {
+		t.Errorf("CameraEnabled should remain true (TOML キー欠落 = skip), got false")
+	}
 }
 
 // TestTweaksConfig_ApplyTo_ExplicitFalseRespected は *bool が false を指しているときに
 // 明示的 OFF として state を false に上書きすることを確認 (Phase 1.14.16)。
+//
+// Phase 2.10.8: CameraEnabled の明示的 OFF も確認。
 func TestTweaksConfig_ApplyTo_ExplicitFalseRespected(t *testing.T) {
 	state := &tweaks.State{
-		BlinkEnabled: true,
-		AudioEnabled: true,
+		BlinkEnabled:  true,
+		AudioEnabled:  true,
+		CameraEnabled: true,
 	}
 	falseVal := false
 	tc := &TweaksConfig{
-		BlinkEnabled: &falseVal,
-		MouthEnabled: &falseVal,
+		BlinkEnabled:  &falseVal,
+		MouthEnabled:  &falseVal,
+		CameraEnabled: &falseVal,
 	}
 	tc.ApplyTo(state)
 	if state.BlinkEnabled {
@@ -255,18 +270,23 @@ func TestTweaksConfig_ApplyTo_ExplicitFalseRespected(t *testing.T) {
 	if state.AudioEnabled {
 		t.Error("AudioEnabled should be overridden to false (明示的 OFF)")
 	}
+	if state.CameraEnabled {
+		t.Error("CameraEnabled should be overridden to false (明示的 OFF)")
+	}
 }
 
-// TestTweaksConfig_CaptureFrom は state の 4 フィールドが TOML 書き込み対象としてコピーされることを確認 (Phase 1.14.16)。
+// TestTweaksConfig_CaptureFrom は state の 5 フィールドが TOML 書き込み対象としてコピーされることを確認 (Phase 1.14.16 + Phase 2.10.8)。
 //
 // Phase 1.14.16 (Critical #2 fix): BlinkEnabled / MouthEnabled は *bool にラップして
 // 必ず TOML に書き込む (= Save 押下後は nil にならない)。
+// Phase 2.10.8: CameraEnabled を追加。
 func TestTweaksConfig_CaptureFrom(t *testing.T) {
 	state := &tweaks.State{
 		MouseResponsiveness: 0.5,
 		BlinkEnabled:        false,
 		AudioEnabled:        false,
 		AudioSensitivity:    15.0,
+		CameraEnabled:       false,
 	}
 
 	tc := &TweaksConfig{}
@@ -283,5 +303,8 @@ func TestTweaksConfig_CaptureFrom(t *testing.T) {
 	}
 	if tc.MicSensitivity != 15.0 {
 		t.Errorf("MicSensitivity: got %v want 15.0", tc.MicSensitivity)
+	}
+	if tc.CameraEnabled == nil || *tc.CameraEnabled {
+		t.Errorf("CameraEnabled: got %v want false pointer", tc.CameraEnabled)
 	}
 }

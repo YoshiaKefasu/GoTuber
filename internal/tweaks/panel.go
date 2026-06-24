@@ -82,6 +82,9 @@ type Panel struct {
 	cameraRestartBtn         *widget.Button
 	onCameraRestartRequested func()
 
+	// Phase 2.10.8: Camera Enabled トグル (checkbox 本体への参照)。
+	cameraCheck *widget.Checkbox
+
 	// Phase 1.14.16: 起動時 ComboBox 初期選択同期用。
 	// main.go が NewPanel に渡した initialDeviceID を保持。
 	// SetDevices() の ComboBox 作成直後に selectDeviceByID() で適用。
@@ -395,6 +398,40 @@ func NewPanel(face *text.GoTextFace, state *State, audioEnabled bool, initialDev
 	root.AddChild(statusLabel)
 	p.statusLabel = statusLabel
 
+	// --- Phase 2.10.8: Camera Enabled トグル ---
+	initialCamera := widget.WidgetUnchecked
+	if state.CameraEnabled {
+		initialCamera = widget.WidgetChecked
+	}
+	cameraCheck := widget.NewCheckbox(
+		widget.CheckboxOpts.WidgetOpts(
+			widget.WidgetOpts.LayoutData(widget.RowLayoutData{
+				Position: widget.RowLayoutPositionStart,
+			}),
+			// Phase 2.10.8 fix: NewNineSliceColor は MinSize (0,0) を返すため、
+			// 明示的な MinSize を指定しないと checkbox が 0x0 で描画され invisible になる。
+			widget.WidgetOpts.MinSize(16, 16),
+		),
+		widget.CheckboxOpts.Image(loadCheckboxImage()),
+		widget.CheckboxOpts.InitialState(initialCamera),
+		widget.CheckboxOpts.StateChangedHandler(func(args *widget.CheckboxChangedEventArgs) {
+			state.CameraEnabled = args.State == widget.WidgetChecked
+			state.Dirty = true
+		}),
+	)
+	cameraRow := widget.NewContainer(
+		widget.ContainerOpts.Layout(widget.NewRowLayout(
+			widget.RowLayoutOpts.Direction(widget.DirectionHorizontal),
+			widget.RowLayoutOpts.Spacing(8),
+		)),
+	)
+	cameraRow.AddChild(cameraCheck)
+	cameraRow.AddChild(widget.NewText(
+		widget.TextOpts.Text("Camera Enabled", facePtr, labelColorIdle),
+	))
+	p.cameraCheck = cameraCheck
+	root.AddChild(cameraRow)
+
 	// --- Phase 2.8: Camera Status + Manual Restart ---
 	root.AddChild(p.NewCameraSection(nil))
 
@@ -596,14 +633,30 @@ func (p *Panel) SetStatus(message string) {
 // Phase 2.8: Game.Update() から毎フレーム呼ばれる。mode は 0=Mouse / 1=Camera。
 // lastErr が nil の場合はエラーなし、非 nil の場合は mp_server.py または detection 系の
 // 異常表示に使う。TOML 永続化は行わない表示専用 state。
-func (p *Panel) UpdateCameraStatus(mode int, mpRunning bool, lastErr *string) {
+//
+// Phase 2.10.8: cameraEnabled パラメータを追加。false のとき Restart ボタンを
+// disabled にし、"Camera: Disabled" 表示にする。
+func (p *Panel) UpdateCameraStatus(mode int, mpRunning bool, lastErr *string, cameraEnabled bool) {
+	restartable := true // ユーザー希望: 全状態で Restart ボタンを常時クリック可能にする。
+
+	if !cameraEnabled {
+		// Phase 2.10.8: Camera Enabled OFF → ボタン無効 + "Disabled" 表示
+		if p.cameraStatusText != nil {
+			p.cameraStatusText.Label = "Camera: Disabled"
+		}
+		if p.cameraRestartBtn != nil {
+			p.cameraRestartBtn.GetWidget().Disabled = true
+		}
+		p.state.CameraMode = "Disabled"
+		p.state.CameraRestartable = false
+		return
+	}
+
 	status := "Mouse"
-	restartable := false
 
 	switch {
 	case !mpRunning:
 		status = "Down"
-		restartable = true
 	case mpRunning && lastErr != nil:
 		status = "Lost Signal"
 	case mode == panelCameraModeCamera:

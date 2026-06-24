@@ -36,6 +36,10 @@ func TestState_Defaults(t *testing.T) {
 	if s.AudioGateOpen {
 		t.Errorf("expected AudioGateOpen=false, got true")
 	}
+	// Phase 2.10.8: CameraEnabled はデフォルト true
+	if !s.CameraEnabled {
+		t.Errorf("expected CameraEnabled=true (Phase 2.10.8 default), got false")
+	}
 	if s.PanelVisible {
 		t.Errorf("expected PanelVisible=false, got true")
 	}
@@ -365,4 +369,196 @@ func TestNewPanel_AudioCheckboxTriState(t *testing.T) {
 	}()
 	// audioEnabled=false → audioCheck は WidgetGreyed で生成
 	NewPanel(face, state, false, "")
+}
+
+// === Phase 2.10.6: UpdateCameraStatus restart button tests ===
+
+// TestUpdateCameraStatus_RestartableInLostSignal は Lost Signal 状態で
+// Restart ボタンが有効になることを確認。
+//
+// Phase 2.10.6: mp_server.py は動いているが lastErr がある状態 (手覆い等) で
+// ユーザーが手動再起動できるようにする。
+func TestUpdateCameraStatus_RestartableInLostSignal(t *testing.T) {
+	face := LoadFontFace(16)
+	state := NewState()
+	panel := NewPanel(face, state, true, "")
+
+	// mpRunning=true, lastErr=non-nil → Lost Signal
+	errMsg := "detection timeout"
+	panel.UpdateCameraStatus(0, true, &errMsg, true)
+
+	if panel.state.CameraMode != "Lost Signal" {
+		t.Errorf("CameraMode = %q, want %q", panel.state.CameraMode, "Lost Signal")
+	}
+	if !panel.state.CameraRestartable {
+		t.Error("CameraRestartable should be true in Lost Signal state")
+	}
+	if panel.cameraRestartBtn == nil {
+		t.Fatal("cameraRestartBtn should exist")
+	}
+	if panel.cameraRestartBtn.GetWidget().Disabled {
+		t.Error("Restart button should be enabled in Lost Signal state")
+	}
+}
+
+// TestUpdateCameraStatus_RestartableInMouse は Mouse mode (エラーなし) で
+// Restart ボタンが有効であることを確認 (全状態で常時クリック可能にするユーザー要求)。
+func TestUpdateCameraStatus_RestartableInMouse(t *testing.T) {
+	face := LoadFontFace(16)
+	state := NewState()
+	panel := NewPanel(face, state, true, "")
+
+	// mpRunning=true, lastErr=nil, mode=0 (Mouse)
+	panel.UpdateCameraStatus(0, true, nil, true)
+
+	if panel.state.CameraMode != "Mouse" {
+		t.Errorf("CameraMode = %q, want %q", panel.state.CameraMode, "Mouse")
+	}
+	if !panel.state.CameraRestartable {
+		t.Error("CameraRestartable should be true in Mouse mode (always restartable)")
+	}
+	if panel.cameraRestartBtn == nil {
+		t.Fatal("cameraRestartBtn should exist")
+	}
+	if panel.cameraRestartBtn.GetWidget().Disabled {
+		t.Error("Restart button should be enabled in Mouse state")
+	}
+}
+
+// TestUpdateCameraStatus_RestartableInActive は Active mode (カメラ使用中) で
+// Restart ボタンが有効であることを確認 (全状態で常時クリック可能にするユーザー要求)。
+func TestUpdateCameraStatus_RestartableInActive(t *testing.T) {
+	face := LoadFontFace(16)
+	state := NewState()
+	panel := NewPanel(face, state, true, "")
+
+	// mpRunning=true, lastErr=nil, mode=1 (Camera/Active)
+	panel.UpdateCameraStatus(panelCameraModeCamera, true, nil, true)
+
+	if panel.state.CameraMode != "Active" {
+		t.Errorf("CameraMode = %q, want %q", panel.state.CameraMode, "Active")
+	}
+	if !panel.state.CameraRestartable {
+		t.Error("CameraRestartable should be true in Active mode (always restartable)")
+	}
+	if panel.cameraRestartBtn == nil {
+		t.Fatal("cameraRestartBtn should exist")
+	}
+	if panel.cameraRestartBtn.GetWidget().Disabled {
+		t.Error("Restart button should be enabled in Active state")
+	}
+}
+
+// TestUpdateCameraStatus_RestartableInDown は Down 状態で Restart ボタンが
+// 有効であることを確認 (既存動作の回帰防止)。
+func TestUpdateCameraStatus_RestartableInDown(t *testing.T) {
+	face := LoadFontFace(16)
+	state := NewState()
+	panel := NewPanel(face, state, true, "")
+
+	// mpRunning=false → Down
+	panel.UpdateCameraStatus(0, false, nil, true)
+
+	if panel.state.CameraMode != "Down" {
+		t.Errorf("CameraMode = %q, want %q", panel.state.CameraMode, "Down")
+	}
+	if !panel.state.CameraRestartable {
+		t.Error("CameraRestartable should be true in Down state")
+	}
+}
+
+// === Phase 2.10.8: Camera Enabled OFF stops runtime tests ===
+
+// TestUpdateCameraStatus_DisabledWhenCameraOff は CameraEnabled=false のとき
+// "Disabled" 表示になり、Restart ボタンが無効になることを確認。
+func TestUpdateCameraStatus_DisabledWhenCameraOff(t *testing.T) {
+	face := LoadFontFace(16)
+	state := NewState()
+	panel := NewPanel(face, state, true, "")
+
+	// cameraEnabled=false → どんな mode/mpRunning でも Disabled
+	panel.UpdateCameraStatus(panelCameraModeCamera, true, nil, false)
+
+	if panel.state.CameraMode != "Disabled" {
+		t.Errorf("CameraMode = %q, want %q", panel.state.CameraMode, "Disabled")
+	}
+	if panel.state.CameraRestartable {
+		t.Error("CameraRestartable should be false when camera is disabled")
+	}
+	if panel.cameraRestartBtn == nil {
+		t.Fatal("cameraRestartBtn should exist")
+	}
+	if !panel.cameraRestartBtn.GetWidget().Disabled {
+		t.Error("Restart button should be disabled when camera is disabled")
+	}
+	if panel.cameraStatusText == nil {
+		t.Fatal("cameraStatusText should exist")
+	}
+	if panel.cameraStatusText.Label != "Camera: Disabled" {
+		t.Errorf("cameraStatusText.Label = %q, want %q", panel.cameraStatusText.Label, "Camera: Disabled")
+	}
+}
+
+// === Phase 2.10.8: Camera Enabled checkbox tests ===
+
+// TestState_CameraEnabledDefault は CameraEnabled がデフォルト true であることを確認。
+func TestState_CameraEnabledDefault(t *testing.T) {
+	s := NewState()
+	if !s.CameraEnabled {
+		t.Error("CameraEnabled should default to true (Phase 2.10.8)")
+	}
+}
+
+// TestNewPanel_CameraEnabledCheckbox は Camera Enabled チェックボックスが
+// state.CameraEnabled に従って生成されることを確認。
+func TestNewPanel_CameraEnabledCheckbox(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("NewPanel panicked: %v", r)
+		}
+	}()
+	face := LoadFontFace(16)
+	state := NewState()
+	// CameraEnabled=true (default) → checkbox should be checked
+	panel := NewPanel(face, state, true, "")
+	if panel == nil {
+		t.Fatal("expected non-nil panel")
+	}
+	// Phase 2.10.8 fix: cameraCheck が actually created されていることを確認
+	if panel.cameraCheck == nil {
+		t.Fatal("cameraCheck should be created in NewPanel")
+	}
+}
+
+// TestNewPanel_CameraEnabledMinSize は Camera Enabled チェックボックスが
+// 最小サイズ (16x16) で生成されることを確認 (Phase 2.10.8 fix)。
+// MinSize がないと NewNineSliceColor の MinSize (0,0) により
+// チェックボックスが 0x0 で描画され invisible になる。
+func TestNewPanel_CameraEnabledMinSize(t *testing.T) {
+	face := LoadFontFace(16)
+	state := NewState()
+	panel := NewPanel(face, state, true, "")
+	if panel.cameraCheck == nil {
+		t.Fatal("cameraCheck should be created")
+	}
+	w := panel.cameraCheck.GetWidget().MinWidth
+	h := panel.cameraCheck.GetWidget().MinHeight
+	if w < 16 || h < 16 {
+		t.Errorf("cameraCheck MinSize = (%d, %d), want at least (16, 16)", w, h)
+	}
+}
+
+// TestNewPanel_CameraEnabledDefaultChecked は CameraEnabled=true 時に
+// チェックボックスが checked 状態で生成されることを確認。
+func TestNewPanel_CameraEnabledDefaultChecked(t *testing.T) {
+	face := LoadFontFace(16)
+	state := NewState()
+	if !state.CameraEnabled {
+		t.Fatal("CameraEnabled should be true by default")
+	}
+	// NewPanel should not panic
+	panel := NewPanel(face, state, true, "")
+	if panel == nil {
+		t.Fatal("expected non-nil panel")
+	}
 }

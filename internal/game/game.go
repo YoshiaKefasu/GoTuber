@@ -4,6 +4,7 @@ package game
 import (
 	"image/color"
 	"math"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -107,7 +108,12 @@ type Game struct {
 
 	// Phase 2.5: camera mode 時に supervisor から cell / blink を読む。
 	// nil のときは mouse follow にフォールバックし、Phase 1 動作を維持する。
-	supervisor SupervisorCellProvider
+	//
+	// Phase 2.10.8: camera goroutine (OFF→ON restart) が SetSupervisor で書換えるため、
+	// sync.RWMutex で保護。game loop (Update/Draw) は getSupervisor() で
+	// ポインタをスナップショットしてから使う (ロック保持中のメソッド呼び出しを回避)。
+	supervisorMu sync.RWMutex
+	supervisor   SupervisorCellProvider
 }
 
 // New は新しい Game を作成する。
@@ -206,10 +212,13 @@ func (g *Game) Update() error {
 	// Phase 2.5.1: 顔未検出 1 秒 grace period 中は CameraCell() の ok=false を見て
 	// blink scheduler にフォールバックする。tickCell() は顔未検出フレームで
 	// eyesClosed=false を保存するため、EyesClosed() だけを見ると瞬きが 1 秒止まる。
-	if g.cameraMode.Load() == cameraModeCamera && g.supervisor != nil {
-		_, _, ok := g.supervisor.CameraCell()
+	//
+	// Phase 2.10.8: getSupervisor() でスナップショット取得 (camera goroutine との race 防止)。
+	sup := g.getSupervisor()
+	if g.cameraMode.Load() == cameraModeCamera && sup != nil {
+		_, _, ok := sup.CameraCell()
 		if ok {
-			g.eyesClosed = g.supervisor.EyesClosed()
+			g.eyesClosed = sup.EyesClosed()
 		} else if g.tweaks.BlinkEnabled {
 			g.eyesClosed = g.blink.Update(time.Now())
 		} else {
@@ -250,14 +259,15 @@ func (g *Game) Update() error {
 
 	// Tweaks panel UI 更新
 	if g.panel != nil {
-		if g.supervisor != nil {
+		if sup != nil {
 			g.panel.UpdateCameraStatus(
 				int(g.cameraMode.Load()),
-				g.supervisor.MPServerRunning(),
-				g.supervisor.LastError(),
+				sup.MPServerRunning(),
+				sup.LastError(),
+				g.IsCameraEnabled(),
 			)
 		} else {
-			g.panel.UpdateCameraStatus(int(g.cameraMode.Load()), false, nil)
+			g.panel.UpdateCameraStatus(int(g.cameraMode.Load()), false, nil, g.IsCameraEnabled())
 		}
 	}
 	if g.tweaks.PanelVisible {
@@ -328,8 +338,9 @@ func (g *Game) Draw(screen *ebiten.Image) {
 // supervisor が未起動 / 顔未検出 / 最新 cell なしの場合は Phase 1.12 の mouse.Cell() に
 // フォールバックし、既存 mouse follow ロジックを変更しない。
 func (g *Game) currentCell() (row, col int) {
-	if g.cameraMode.Load() == cameraModeCamera && g.supervisor != nil {
-		row, col, ok := g.supervisor.CameraCell()
+	sup := g.getSupervisor()
+	if g.cameraMode.Load() == cameraModeCamera && sup != nil {
+		row, col, ok := sup.CameraCell()
 		if ok {
 			return row, col
 		}
@@ -421,16 +432,49 @@ func (g *Game) SetCameraMode(mode int) {
 //
 // camera_hook_camera.go (`//go:build camera`) から *camera.Supervisor を渡す。
 // Phase 1 ビルドでは呼ばれず、nil のまま mouse follow が動作する。
+//
+// Phase 2.10.8: camera goroutine の OFF→ON restart から呼ばれるため、
+// 書き込みロックで保護する。
 func (g *Game) SetSupervisor(supervisor SupervisorCellProvider) {
+	g.supervisorMu.Lock()
 	g.supervisor = supervisor
+	g.supervisorMu.Unlock()
+}
+
+// getSupervisor は supervisor ポインタの安全なスナップショットを返す (Phase 2.10.8)。
+//
+// 読み取りロックでポインタだけコピーし、ロックをすぐ解放する。
+// 呼び出し側は戻り値 sup を使い、g.supervisor を直接触らない。
+// nil のときは nil が返る (Phase 1 ビルド / camera 停止中)。
+func (g *Game) getSupervisor() SupervisorCellProvider {
+	g.supervisorMu.RLock()
+	sup := g.supervisor
+	g.supervisorMu.RUnlock()
+	return sup
 }
 
 // RestartCamera は Tweaks panel の Manual Restart ボタンから camera supervisor へ再起動を委譲する。
 //
 // Phase 2.8: game パッケージは camera パッケージを import しないため、interface 経由で呼ぶ。
+// Phase 2.10.8: CameraEnabled=false のときは no-op (カメラが停止しているため再起動不要)。
 func (g *Game) RestartCamera() error {
-	if g.supervisor == nil {
+	sup := g.getSupervisor()
+	if sup == nil {
 		return nil
 	}
-	return g.supervisor.RestartMPServer()
+	if !g.IsCameraEnabled() {
+		return nil // Camera OFF: ユーザーが OFF にした以上再起動不要
+	}
+	return sup.RestartMPServer()
+}
+
+// IsCameraEnabled は Tweaks の CameraEnabled フィールドを返す (Phase 2.10.8)。
+//
+// camera_hook_camera.go の supervisor mode 反映 goroutine で、
+// CameraEnabled=false のとき CameraModeMouse (0) を強制するために使う。
+func (g *Game) IsCameraEnabled() bool {
+	if g.tweaks == nil {
+		return true // nil はデフォルト ON
+	}
+	return g.tweaks.CameraEnabled
 }

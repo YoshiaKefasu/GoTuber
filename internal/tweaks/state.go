@@ -31,10 +31,16 @@ type State struct {
 	AudioMouthState int
 	AudioGateOpen   bool
 
+	// Camera Enabled: カメラ追跡モードの有効/無効 (Phase 2.10.8)。
+	// true (デフォルト): カメラ追跡 ON → supervisor が顔検出で mouse↔camera 切替
+	// false: カメラ追跡 OFF → 常時 mouse follow モード (Phase 1 相当)
+	// TOML 永続化対象。ApplyTo/CaptureFrom で TweaksConfig と往復する。
+	CameraEnabled bool
+
 	// Camera 状態 (Phase 2.8 で追加、表示専用、TOML 永続化なし)。
 	// ResetToDefaults の対象外 (Supervisor API から毎フレーム更新される runtime 表示専用 state)。
 	CameraMode        string // "Mouse" / "Active" / "Lost Signal" / "Down"
-	CameraRestartable bool   // Down 状態時のみ true、Restart ボタン有効化用
+	CameraRestartable bool   // 全状態で true、Restart ボタン常時有効化用
 
 	// UI 表示
 	PanelVisible bool // F1 で toggle
@@ -63,6 +69,7 @@ func NewState() *State {
 		AudioEnabled:        true,
 		// Phase 1.14.15: 15.0x → 10.0x に下げる (詳細は PHASE1.md Section 13.7 参照)。
 		AudioSensitivity:  10.0,
+		CameraEnabled:     true, // Phase 2.10.8: デフォルト ON
 		CameraMode:        "Mouse",
 		CameraRestartable: false,
 		PanelVisible:      false,
@@ -70,7 +77,7 @@ func NewState() *State {
 	}
 }
 
-// ResetToDefaults は 4 つの永続化対象フィールドをデフォルト値に復元する (Phase 1.14.16 → Round 3 で YAGNI 削除)。
+// ResetToDefaults は 5 つの永続化対象フィールドをデフォルト値に復元する (Phase 1.14.16 → Round 3 で YAGNI 削除)。
 //
 // 注意: このメソッドは Phase 1.14.16 Round 2 まで Reset ボタンから呼ばれていたが、
 // Round 3 で Reset ボタン自体が YAGNI 削除されたため、現バージョンでは呼ばれない。
@@ -81,4 +88,5 @@ func (s *State) ResetToDefaults() {
 	s.BlinkEnabled = true
 	s.AudioEnabled = true
 	s.AudioSensitivity = 10.0
+	s.CameraEnabled = true // Phase 2.10.8
 }

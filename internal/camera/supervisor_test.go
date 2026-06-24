@@ -168,11 +168,12 @@ func TestSupervisor_SwitchToCamera_UpdatesMode(t *testing.T) {
 		t.Fatalf("initial Mode() = %d, want %d (CameraModeMouse)", got, CameraModeMouse)
 	}
 
-	// faceDetected=true + lastDetected=now を強制 (mu 保護下)
+	// faceDetected=true + lastDetected=now + warm-up gate 条件充足を強制 (mu 保護下)
 	nowUnix := float64(time.Now().UnixNano()) / 1e9
 	s.mu.Lock()
 	s.faceDetected = true
 	s.lastDetected = nowUnix
+	s.warmupDone = true // tickDetection は mpclient=nil で detected=false を返すため、gate を直接解除
 	s.mu.Unlock()
 
 	// tickDetection を直接呼ぶ
@@ -329,5 +330,149 @@ func TestSupervisor_LastError_AtomicNilByDefault(t *testing.T) {
 	s := NewSupervisor(nil, nil)
 	if s.LastError() != nil {
 		t.Fatalf("NewSupervisor LastError() should be nil, got: %v", s.LastError())
+	}
+}
+
+// === Phase 2.10.6: startup warm-up gate tests ===
+
+// TestSupervisor_WarmupGate_BlocksImmediateSwitch は起動直後に顔検出が来ても
+// warm-up gate が Mouse→Camera 切替をブロックすることを確認。
+//
+// tickDetectionSnapshot を DetectionResult で直接呼び、
+// faceDetectionWarmupTicks 回未満では mode が CameraModeMouse のままであることを検証。
+func TestSupervisor_WarmupGate_BlocksImmediateSwitch(t *testing.T) {
+	s := NewSupervisor(nil, nil)
+	// 起動しない (supervisor loop と race させない)
+
+	if got := s.Mode(); got != CameraModeMouse {
+		t.Fatalf("initial Mode() = %d, want %d", got, CameraModeMouse)
+	}
+
+	// 顔検出シグナルを 5 tick 分送る (warmup threshold 15 未満)
+	dr := DetectionResult{FaceDetected: true}
+	for i := 0; i < 5; i++ {
+		s.tickDetectionSnapshot(dr, true)
+	}
+
+	// warm-up 未完了 → まだ Mouse mode
+	if got := s.Mode(); got != CameraModeMouse {
+		t.Errorf("Mode() after 5 detection ticks = %d, want %d (warmup not complete)", got, CameraModeMouse)
+	}
+}
+
+// TestSupervisor_WarmupGate_AllowsSwitchAfterThreshold は連続検出が threshold に達した後に
+// Mouse→Camera 切替が許可されることを確認。
+func TestSupervisor_WarmupGate_AllowsSwitchAfterThreshold(t *testing.T) {
+	s := NewSupervisor(nil, nil)
+
+	// 顔検出シグナルを warmup threshold (15) 分連続で送る
+	dr := DetectionResult{FaceDetected: true}
+	for i := 0; i < faceDetectionWarmupTicks; i++ {
+		s.tickDetectionSnapshot(dr, true)
+	}
+
+	// warm-up 完了 → Camera mode に切り替わる
+	if got := s.Mode(); got != CameraModeCamera {
+		t.Errorf("Mode() after %d detection ticks = %d, want %d (warmup complete)",
+			faceDetectionWarmupTicks, got, CameraModeCamera)
+	}
+}
+
+// TestSupervisor_WarmupGate_BypassedAfterWarmupDone は一度 Camera mode に入った後、
+// Mouse→Camera 切替が warm-up gate をバイパスすることを確認。
+// (通常の recovery speed に影響しないことの検証)
+func TestSupervisor_WarmupGate_BypassedAfterWarmupDone(t *testing.T) {
+	s := NewSupervisor(nil, nil)
+
+	// Phase 1: warm-up 完了まで検出を続ける
+	dr := DetectionResult{FaceDetected: true}
+	for i := 0; i < faceDetectionWarmupTicks; i++ {
+		s.tickDetectionSnapshot(dr, true)
+	}
+	if got := s.Mode(); got != CameraModeCamera {
+		t.Fatalf("Mode() after warmup = %d, want %d", got, CameraModeCamera)
+	}
+
+	// Phase 2: Mouse mode にフォールバック (顔喪失)
+	// lastDetected を過去に設定して timeout (1s) を超過させる。
+	// faceLostTicks を grace 閾値より大きくして、最初の tick で即 faceDetected=false にする。
+	s.mu.Lock()
+	s.lastDetected = float64(time.Now().UnixNano())/1e9 - 2.0 // 2秒前
+	s.faceLostTicks = 100 // grace (5) を超過 → 即座に faceDetected=false
+	s.faceDetectedTicks = 0
+	s.mu.Unlock()
+	drLost := DetectionResult{FaceDetected: false}
+	s.tickDetectionSnapshot(drLost, true)
+	if got := s.Mode(); got != CameraModeMouse {
+		t.Fatalf("Mode() after face loss = %d, want %d", got, CameraModeMouse)
+	}
+
+	// Phase 3: 顔復帰 — warmupDone=true なので 1 tick で Camera に戻る
+	s.tickDetectionSnapshot(dr, true)
+	if got := s.Mode(); got != CameraModeCamera {
+		t.Errorf("Mode() after 1 recovery tick = %d, want %d (warmup bypassed)", got, CameraModeCamera)
+	}
+}
+
+// TestSupervisor_Stop_ResetsWarmupState は Stop 後に warm-up 状態がリセットされることを確認。
+func TestSupervisor_Stop_ResetsWarmupState(t *testing.T) {
+	s := NewSupervisor(nil, nil)
+
+	// warm-up を完了させる
+	dr := DetectionResult{FaceDetected: true}
+	for i := 0; i < faceDetectionWarmupTicks; i++ {
+		s.tickDetectionSnapshot(dr, true)
+	}
+	if got := s.Mode(); got != CameraModeCamera {
+		t.Fatalf("Mode() after warmup = %d, want %d", got, CameraModeCamera)
+	}
+
+	// Stop でリセット
+	if err := s.Stop(); err != nil {
+		t.Fatalf("Stop() = %v", err)
+	}
+
+	// warmupDone / faceDetectedTicks がリセットされているか確認
+	s.mu.Lock()
+	warmupDone := s.warmupDone
+	faceDetectedTicks := s.faceDetectedTicks
+	s.mu.Unlock()
+
+	if warmupDone {
+		t.Error("warmupDone should be false after Stop()")
+	}
+	if faceDetectedTicks != 0 {
+		t.Errorf("faceDetectedTicks = %d, want 0 after Stop()", faceDetectedTicks)
+	}
+}
+
+// TestSupervisor_WarmupGate_ResetOnFaceLoss は顔検出途切れ時に
+// 連続カウントがリセットされることを確認。
+func TestSupervisor_WarmupGate_ResetOnFaceLoss(t *testing.T) {
+	s := NewSupervisor(nil, nil)
+
+	// 10 tick 検出 (threshold 15 未満)
+	dr := DetectionResult{FaceDetected: true}
+	for i := 0; i < 10; i++ {
+		s.tickDetectionSnapshot(dr, true)
+	}
+
+	// 途切れ
+	s.tickDetectionSnapshot(DetectionResult{FaceDetected: false}, true)
+
+	// カウントがリセットされているか確認
+	s.mu.Lock()
+	ticks := s.faceDetectedTicks
+	s.mu.Unlock()
+	if ticks != 0 {
+		t.Errorf("faceDetectedTicks after face loss = %d, want 0", ticks)
+	}
+
+	// もう一度 threshold まで検出が必要
+	for i := 0; i < faceDetectionWarmupTicks; i++ {
+		s.tickDetectionSnapshot(dr, true)
+	}
+	if got := s.Mode(); got != CameraModeCamera {
+		t.Errorf("Mode() after re-warmup = %d, want %d", got, CameraModeCamera)
 	}
 }

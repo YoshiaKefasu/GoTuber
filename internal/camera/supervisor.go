@@ -105,6 +105,15 @@ const (
 	mpServerMaxFails       = 5 // 5回失敗で manual restart 要求
 )
 
+// faceDetectionWarmupTicks は起動時の Camera mode 切替に必要な顔検出連続 tick 数。
+// 60Hz で 15 ticks = ~250ms。起動直後の顔検出揺らぎで Mouse↔Camera が
+// 連続切替するのを防ぐ (Phase 2.10.6)。
+const faceDetectionWarmupTicks = 15
+
+// modeLogCooldown は Mouse/Camera 切替ログの最小出力間隔。
+// 実際の mode 切替は維持しつつ、PowerShell を同一系統ログで埋めないための最小限の間引き。
+const modeLogCooldown = 12 * time.Second
+
 const errMPServerMaxFails = "mp_server.py 5回連続失敗、手動再起動必要"
 
 // Supervisor は L2 (MPClient) の lifecycle +
@@ -142,7 +151,9 @@ type Supervisor struct {
 	mode         CameraMode // 1秒タイマー判定後に更新
 	lastDetected float64    // Unix 秒、最後の顔検出成功時刻
 	faceDetected bool       // 顔検出状態 (1秒タイマーで判定)
-	faceLostTicks int       // Phase 2.10.5: 顔未検出連続 tick 数 (grace 用)
+	faceLostTicks   int  // Phase 2.10.5: 顔未検出連続 tick 数 (grace 用)
+	faceDetectedTicks int // 顔検出連続 tick 数 (startup warm-up 用)
+	warmupDone      bool // 最初の Camera mode 入力が完了したか (true 以降は gate 不要)
 
 	// 起動・終了制御
 	loopCtx context.Context
@@ -160,6 +171,7 @@ type Supervisor struct {
 	smoothedPitch float64
 	smoothingInit bool // 最初の 1 フレームは raw 値をそのまま代入 (EMA 初期化)
 	cellLogCount  int  // Phase 2.10.5: debug log 用カウンタ (60Hz で 1 秒ごと出力)
+	lastModeLogAt time.Time
 
 	// Phase 2.7: mp_server.py サブプロセス管理。
 	mpServerCmd        *exec.Cmd
@@ -326,6 +338,12 @@ func (s *Supervisor) Stop() error {
 		s.blinkFilter.Reset()
 	}
 
+	// Phase 2.10.6: startup warm-up 状態をリセット。
+	// 次回 Start 時に warm-up gate が再適用されるようにする。
+	s.faceDetectedTicks = 0
+	s.warmupDone = false
+	s.lastModeLogAt = time.Time{}
+
 	s.stateObserver.running.Store(false)
 	log.Printf("camera: supervisor stopped")
 	return nil
@@ -449,6 +467,8 @@ func (s *Supervisor) tickDetectionSnapshot(dr DetectionResult, ok bool) {
 		s.lastDetected = nowUnix
 		s.faceDetected = true
 		s.faceLostTicks = 0
+		// Phase 2.10.6: startup warm-up — 連続検出カウントを増やす。
+		s.faceDetectedTicks++
 	} else {
 		// 1秒タイムアウト判定: now - lastDetected < 1.0
 		if s.lastDetected > 0 && nowUnix-s.lastDetected < faceDetectionTimeoutSec {
@@ -463,11 +483,19 @@ func (s *Supervisor) tickDetectionSnapshot(dr DetectionResult, ok bool) {
 				s.faceDetected = false
 			}
 		}
+		// Phase 2.10.6: 顔未検出 → 連続カウントリセット
+		s.faceDetectedTicks = 0
 	}
+
+	// Phase 2.10.6: startup warm-up gate。
+	// 最初の Camera mode 入力前に限って、顔検出が一定回数連続するまで
+	// Mouse→Camera 切替を保留する。これにより起動直後の mode フラッピングを防止。
+	// warmupDone=true 以降は gate を通過し、通常の lost-signal フォールバック速度は維持。
+	readyForCamera := s.warmupDone || s.faceDetectedTicks >= faceDetectionWarmupTicks
 
 	// mode 切替判定
 	switch {
-	case s.faceDetected && s.mode == CameraModeMouse:
+	case s.faceDetected && s.mode == CameraModeMouse && readyForCamera:
 		s.switchToCameraLocked()
 	case !s.faceDetected && s.mode == CameraModeCamera:
 		s.switchToMouseLocked()
@@ -544,7 +572,9 @@ func (s *Supervisor) tickCell(dr DetectionResult, ok bool) {
 func (s *Supervisor) switchToCameraLocked() {
 	s.mode = CameraModeCamera
 	s.stateObserver.mode.Store(int32(CameraModeCamera))
-	log.Printf("camera: supervisor: mode → Camera (face detected)")
+	// Phase 2.10.6: 最初の Camera mode 入力完了。以降は warm-up gate 不要。
+	s.warmupDone = true
+	s.logModeTransitionLocked("camera: supervisor: mode → Camera (face detected)")
 }
 
 // switchToMouseLocked は camera mode → mouse mode 切替 (mu 保護下前提)。
@@ -562,7 +592,19 @@ func (s *Supervisor) switchToMouseLocked() {
 	s.smoothingInit = false
 	s.faceLostTicks = 0
 	s.cellLogCount = 0
-	log.Printf("camera: supervisor: mode → Mouse (face lost or timeout)")
+	s.logModeTransitionLocked("camera: supervisor: mode → Mouse (face lost or timeout)")
+}
+
+// logModeTransitionLocked は mode 切替ログの連発を抑える。
+// 実際の Mouse/Camera 切替は変えず、ログだけ 1 秒に 1 回までへ間引く。
+// mu 保護下前提。
+func (s *Supervisor) logModeTransitionLocked(line string) {
+	now := time.Now()
+	if !s.lastModeLogAt.IsZero() && now.Sub(s.lastModeLogAt) < modeLogCooldown {
+		return
+	}
+	log.Print(line)
+	s.lastModeLogAt = now
 }
 
 // monitorAndRestart は L1/L2 の生存を監視し、死亡時に exponential backoff で再起動。

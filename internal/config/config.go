@@ -73,6 +73,12 @@ type TweaksConfig struct {
 	// MicSensitivity: 1.0..20.0 (UI int 10..200 を内部で /10.0 換算)。
 	// ゼロ値は「未設定」とみなし ApplyTo で skip。
 	MicSensitivity float64 `toml:"mic_sensitivity"`
+
+	// CameraEnabled: カメラ追跡モード有効化 (Phase 2.10.8)。
+	// *bool で TOML キー欠落 (nil) と false を区別。
+	// nil なら ApplyTo skip (State のデフォルト true を保持)。
+	// 非 nil なら *b の値を State に上書き (明示的 OFF を尊重)。
+	CameraEnabled *bool `toml:"camera_enabled"`
 }
 
 // Path は設定ファイルの絶対パスを返す。
@@ -144,6 +150,8 @@ func (c *Config) Save() error {
 //   - MouthEnabled: *bool が nil なら skip (state のデフォルト true を保持)、
 //     非 nil なら *b の値を上書き (明示的 OFF を尊重)
 //   - MicSensitivity: 0.0 なら skip (state のデフォルト 10.0 を保持)
+//   - CameraEnabled: *bool が nil なら skip (state のデフォルト true を保持)、
+//     非 nil なら *b の値を上書き (明示的 OFF を尊重) (Phase 2.10.8)
 //
 // 呼び出しは cmd/gotuber/main.go の config.Load() 直後、NewState() 直後。
 func (t *TweaksConfig) ApplyTo(state *tweaks.State) {
@@ -159,14 +167,19 @@ func (t *TweaksConfig) ApplyTo(state *tweaks.State) {
 	if t.MicSensitivity != 0 {
 		state.AudioSensitivity = t.MicSensitivity
 	}
+	if t.CameraEnabled != nil {
+		state.CameraEnabled = *t.CameraEnabled
+	}
 }
 
-// CaptureFrom は state の 4 フィールドを TOML 書き込み対象としてコピーする。
+// CaptureFrom は state の 5 フィールドを TOML 書き込み対象としてコピーする。
 // Save ボタン押下時に main.go から呼ばれる。
 //
 // Phase 1.14.16: BlinkEnabled / MouthEnabled は *bool として必ずコピー (nil にしない)。
 // Save ボタン押下 = ユーザーが明示的に Save を選択した瞬間なので、「明示的 OFF」
 // と「TOML 欠落」を区別する必要はない。State の bool をそのまま & でラップ。
+//
+// Phase 2.10.8: CameraEnabled を追加。
 func (t *TweaksConfig) CaptureFrom(state *tweaks.State) {
 	t.MouseResponsiveness = state.MouseResponsiveness
 	blinkVal := state.BlinkEnabled
@@ -174,4 +187,6 @@ func (t *TweaksConfig) CaptureFrom(state *tweaks.State) {
 	mouthVal := state.AudioEnabled
 	t.MouthEnabled = &mouthVal
 	t.MicSensitivity = state.AudioSensitivity
+	cameraVal := state.CameraEnabled
+	t.CameraEnabled = &cameraVal
 }

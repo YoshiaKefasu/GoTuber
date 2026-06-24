@@ -32,6 +32,7 @@
 - **Webcam 頭の方向トラッキング** — 顔の動き（左右・上下）にキャラが追従（5×5 グリッド）
 - **自動まばたき（EAR）** — MediaPipe Face Landmarker の Eye Aspect Ratio で瞬き検出
 - **フェイルセーフ** — 顔が消えたら自動的にマウスモード（Phase 1.5）に切替
+- **Camera ON/OFF 切替**（Phase 2.10.8 実装完了） — Tweaks からカメラ追従を止めて、mouse グルグルへ戻せる
 - **Python サイドカー構成** — MediaPipe は Python プロセスで実行、GoTuber.exe は Go バイナリのみ（サイズ不変、起動失敗時は graceful degradation）
 - **MediaPipe モデル同梱** — `assets/models/face_landmarker.task` を同梱（Google / MediaPipe、Apache-2.0）。通常起動時の自動ダウンロード不要
 - **配信中可用性** — MediaPipe tracker がクラッシュしてもメイン GoTuber は無影響、supervisor loop が exponential backoff (1s→30s) で自動再起動、5 回連続失敗で manual restart 待ち
@@ -113,7 +114,7 @@
 - Phase 2.10 で `blackjack/webcam` / ZeroMQ 依存を除去済み
 - Go 側 camera 通信は localhost TCP JSONL
 - Python sidecar 実行時は `tools/requirements-mp.txt` の依存が必要
-- 次段階 (Phase 2.10.2) で `.venv-mp` 自動作成 / 自動依存導入 / 自動起動を追加予定
+- Tweaks の **Camera Enabled** トグルで camera supervisor の起動/停止を制御可能 (Phase 2.10.8)
 
 #### WSL Ubuntu / Linux
 ```bash

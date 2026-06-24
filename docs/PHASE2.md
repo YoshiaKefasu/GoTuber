@@ -486,6 +486,24 @@ Phase 2.10 ではこれを次のように解消した:
 - webcam preview の鏡像体感に合わせ、`yaw = -yaw` を追加
 - これでユーザーの左右感覚とキャラの左右を一致させる
 
+### Phase 2.10.8: Camera ON/OFF トグル (2026-06-24, ✅ 実装完了)
+
+- Tweaks パネルに **Camera Enabled** チェックボックスを追加する
+- **デフォルトは ON**。既存の camera build / visual test 体験は維持する
+- ユーザーが OFF にすると、**camera supervisor / mp_server.py / MPClient を停止**し、
+  キャラは常に **Phase 1 の mouse follow** に戻る
+- ON に戻すと camera supervisor を再起動し、顔検出が安定した時点で camera mode に復帰する
+- `Restart Camera` ボタンは Camera Enabled が ON の時だけ意味を持つ。OFF 中は disabled
+- 永続化対象は `config.toml` の `[tweaks]` セクション `camera_enabled = true|false`
+
+#### 受け入れ条件
+
+- 起動直後の既定値は **ON**
+- OFF に切り替えた瞬間に `Camera: Mouse` 扱いとなり、頭追従が止まる
+- OFF 中は `mp_server.py` が再起動ループしない
+- ON に戻すと camera pipeline が再起動し、`Active` へ復帰できる
+- `Save` 後に再起動しても ON/OFF 状態が保持される
+
 ---
 
 ## 6. 完了基準 (DoD)
@@ -501,6 +519,7 @@ Phase 2.10 ではこれを次のように解消した:
 - [ ] `--no-camera` フラグで Python 不要モード起動 (配信者セットアップ簡略化)
 - [ ] カメラ切断時にクラッシュせずマウスモードへ移行
 - [ ] Tweaks の `[tweaks]` セクションに `camera_enabled` / `mirror` 永続化
+- [ ] Tweaks で Camera Enabled を OFF にすると常時 mouse follow に戻せる
 - [ ] **`go test ./...` 全パス、`go test -tags camera` でも全パス**
 - [ ] **配信中可用性 (Section 1.1)**: CameraTracker を `kill -9 $mp_server_pid` で殺しても 5 秒以内に supervisor loop が自動再起動 → 頭追従復帰
 - [ ] **クラッシュ耐性**: CameraTracker に panic を強制 (`kill -SIGSEGV` or Go 内部) してもメイン GoTuber は無影響、supervisor が 30 秒以内に再起動

@@ -62,7 +62,8 @@ const cameraModeUpdateInterval = 16 * time.Millisecond
 // 配信中可用性方針 (Section 1.1): Python サイドカー不在や OpenCV ロード失敗でも
 // GoTuber 本体は正常起動し、Phase 1 マウスモードで動作継続。
 //
-// Phase 2.10: CameraTracker 生成を削除。webcam capture は mp_server.py が担当。
+// Phase 2.10.8: CameraEnabled=false のとき supervisor/mp_server を停止し、
+// CameraEnabled=true のとき再起動する。
 func init() {
 	cameraHook = func(ctx context.Context, g *game.Game) <-chan struct{} {
 		done := make(chan struct{})
@@ -90,20 +91,64 @@ func init() {
 		}
 
 		// 60Hz で supervisor.Mode() → game.SetCameraMode() 反映 goroutine。
-		// 終了時 (ctx.Done): mouse mode (0) に戻して game に通知。
-		// Phase 2.5.1: goroutine 終了時に done を close し、main() が cleanup 完了を待てるようにする。
+		// Phase 2.10.8:
+		//   - CameraEnabled=false → supervisor/mp_server を停止 (runtime リソース解放)
+		//   - CameraEnabled=true (OFF→ON 遷移) → MPClient + Supervisor を再生成し再起動
+		//   - 終了時 (ctx.Done): supervisor 停止 + mouse mode に戻す
 		go func() {
 			defer close(done)
 			ticker := time.NewTicker(cameraModeUpdateInterval)
 			defer ticker.Stop()
-			defer supervisor.Stop()
+			wasEnabled := true // 起動時は supervisor を起動済み (= enabled)
 			for {
 				select {
 				case <-ctx.Done():
-					g.SetCameraMode(0) // mouse mode に戻す
+					_ = supervisor.Stop()
+					g.SetCameraMode(0)
 					return
 				case <-ticker.C:
-					g.SetCameraMode(int(supervisor.Mode()))
+					enabled := g.IsCameraEnabled()
+					if !enabled && wasEnabled {
+						// ON→OFF 遷移: supervisor/mp_server を停止 (runtime リソース解放)
+						if supervisor.IsRunning() {
+							_ = supervisor.Stop()
+						}
+						log.Printf("camera: supervisor stopped (Camera Enabled → OFF)")
+						g.SetCameraMode(0)
+					} else if enabled && !wasEnabled {
+						// OFF→ON 遷移: MPClient + Supervisor を再生成して再起動。
+						// Stop() で mpclient.Close() されたため、新規バインドが必要。
+						newMPClient, err := camera.NewMPClient(detectionPort)
+						if err != nil {
+							log.Printf("camera: restart failed (NewMPClient): %v", err)
+							g.SetCameraMode(0)
+							wasEnabled = enabled
+							continue
+						}
+						newSupervisor := camera.NewSupervisor(newMPClient, nil)
+						if err := newSupervisor.Start(ctx); err != nil {
+							log.Printf("camera: restart failed (supervisor.Start): %v", err)
+							newMPClient.Close()
+							g.SetCameraMode(0)
+							wasEnabled = enabled
+							continue
+						}
+						supervisor = newSupervisor
+						g.SetSupervisor(supervisor)
+						if err := supervisor.StartMPServer(); err != nil {
+							log.Printf("camera: mp_server.py restart failed (monitorMPServer will retry): %v", err)
+						}
+						log.Printf("camera: supervisor restarted (Camera Enabled → ON)")
+					}
+
+					if enabled {
+						// Camera ON: supervisor の mode を反映
+						g.SetCameraMode(int(supervisor.Mode()))
+					} else {
+						// Camera OFF: 強制 mouse mode
+						g.SetCameraMode(0)
+					}
+					wasEnabled = enabled
 				}
 			}
 		}()
