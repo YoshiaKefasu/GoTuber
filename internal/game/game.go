@@ -2,8 +2,8 @@
 package game
 
 import (
+	"fmt"
 	"image/color"
-	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -13,6 +13,7 @@ import (
 	"github.com/YoshiaKefasu/GoTuber/internal/character"
 	"github.com/YoshiaKefasu/GoTuber/internal/killswitch"
 	"github.com/YoshiaKefasu/GoTuber/internal/mouse"
+	"github.com/YoshiaKefasu/GoTuber/internal/render"
 	"github.com/YoshiaKefasu/GoTuber/internal/tweaks"
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
@@ -209,6 +210,14 @@ type Game struct {
 	// lastDrawTime は前フレームの時刻。updateTransition への deltaSec 計算に使う。
 	lastDrawTime    time.Time
 	firstDrawPassed bool // 初回 Update で lastDrawTime を初期化済みか
+
+	// ─── Phase 4.1: Mesh Renderer ──────────────────────────────────────────
+
+	// meshCache は画像サイズごとのメッシュをキャッシュする。
+	// 同じ画像サイズの描画が繰り返されるため、毎フレーム再生成しない。
+	// キー: "imgW×imgH@screenW×screenH"、値: フラットメッシュ
+	meshCacheMu sync.RWMutex
+	meshCache   map[string]*render.MeshGrid
 }
 
 // New は新しい Game を作成する。
@@ -244,6 +253,7 @@ func New(
 		prevCol:        -1,
 		firstCellSet:   false,
 		firstDrawPassed: false,
+		meshCache:      make(map[string]*render.MeshGrid),
 	}
 }
 
@@ -438,28 +448,18 @@ func (g *Game) Draw(screen *ebiten.Image) {
 
 	// Phase 4.0: α ブレンド遷移中は旧セルと新セルを重ねて描画。
 	// 遷移中でない場合は従来通り 1 枚描画。
+	// Phase 4.1: DrawImage から DrawTriangles (メッシュレンダリング) に切替。
 	if g.transEnabled && g.trans.active {
 		// 遷移元 (フェードアウト)
 		fromImg, fromOk := g.atlas.Get(g.trans.fromSheet, g.trans.fromRow, g.trans.fromCol)
 		// 遷移先 (フェードイン)
 		toImg, toOk := g.atlas.Get(sheetIdx, row, col)
 
-		// スケール基準は遷移先画像。nil の場合は遷移元で代替。
-		refImg := toImg
-		if refImg == nil {
-			refImg = fromImg
-		}
-		if refImg == nil {
-			return // 両方 nil なら描画不可
-		}
-
-		scale, ox, oy := g.calcDrawPosition(refImg)
-
 		if fromOk && fromImg != nil {
-			g.drawImageWithAlpha(screen, fromImg, 1.0-g.trans.progress, scale, ox, oy)
+			g.drawMeshWithAlpha(screen, fromImg, 1.0-g.trans.progress)
 		}
 		if toOk && toImg != nil {
-			g.drawImageWithAlpha(screen, toImg, g.trans.progress, scale, ox, oy)
+			g.drawMeshWithAlpha(screen, toImg, g.trans.progress)
 		}
 	} else {
 		// 従来通り: 単一画像を 100% alpha で描画
@@ -468,8 +468,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 			return
 		}
 
-		scale, ox, oy := g.calcDrawPosition(img)
-		g.drawImageWithAlpha(screen, img, 1.0, scale, ox, oy)
+		g.drawMeshWithAlpha(screen, img, 1.0)
 	}
 
 	if !g.uiHidden && g.tweaks.PanelVisible {
@@ -477,39 +476,16 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	}
 }
 
-// calcDrawPosition は画像のアスペクト比維持スケールとオフセットを計算する。
-func (g *Game) calcDrawPosition(img *ebiten.Image) (scale, ox, oy float64) {
-	iw, ih := img.Bounds().Dx(), img.Bounds().Dy()
-	scaleX := float64(g.width) / float64(iw)
-	scaleY := float64(g.height) / float64(ih)
-	scale = math.Min(scaleX, scaleY)
-	scaledW := float64(iw) * scale
-	scaledH := float64(ih) * scale
-	ox = (float64(g.width) - scaledW) / 2
-	oy = (float64(g.height) - scaledH) / 2
-	return scale, ox, oy
-}
-
-// drawImageWithAlpha は画像を指定 alpha で screen に描画する。
-// alpha=1.0 の場合は普通の DrawImage 相当 (ColorScale スキップ)。
-func (g *Game) drawImageWithAlpha(screen, img *ebiten.Image, alpha, scale, ox, oy float64) {
-	op := &ebiten.DrawImageOptions{}
-	// FilterLinear: スケール時のジャギーを防ぐ (Ebitengine デフォルトの FilterNearest だと
-	// 1200x1200 スプライトを 720x720 (1280x720 ウィンドウ中央に letterbox) に縮小した時に
-	// エッジがギザギザになる)。縮小方向は Linear で十分、拡大方向は Pixel-art なら Nearest の
-	// ほうが好ましいが現実装は 5x5 cell (各 1200x1200) を画面サイズに縮小する用途が主なので
-	// Linear で統一。
-	op.Filter = ebiten.FilterLinear
-	op.GeoM.Scale(scale, scale)
-	op.GeoM.Translate(ox, oy)
-	if alpha < 1.0 {
-		// Phase 4.0: ColorScale.ScaleAlpha で画像全体のアルファを制御。
-		// 旧セルは (1-progress)、新セルは progress で 2 枚重ねてクロスフェード。
-		// 注: ScreenTransparent 背景上で 2 回 DrawImage するため中間地点で
-		// 少し暗くなるが、100ms の短い遷移では体感上問題ない (Phase 4.4 で最適化可能)。
-		op.ColorScale.ScaleAlpha(float32(alpha))
+// drawMeshWithAlpha は画像をメッシュ経由で指定 alpha で screen に描画する。
+// Phase 4.1: DrawTriangles ベースの描画パス。将来 4.2 で depth map による
+// 頂点変位を追加する際の拡張ポイント。
+func (g *Game) drawMeshWithAlpha(screen, img *ebiten.Image, alpha float64) {
+	if img == nil {
+		return
 	}
-	screen.DrawImage(img, op)
+	iw, ih := img.Bounds().Dx(), img.Bounds().Dy()
+	mesh := g.getMeshForImage(iw, ih)
+	render.DrawMeshWithAlpha(screen, img, mesh, float32(alpha))
 }
 
 // currentCell は現在の camera mode に応じた atlas cell を返す。
@@ -657,4 +633,34 @@ func (g *Game) IsCameraEnabled() bool {
 		return true // nil はデフォルト ON
 	}
 	return g.tweaks.CameraEnabled
+}
+
+// getMeshForImage は画像サイズと現在のウィンドウサイズに対応するフラットメッシュを
+// キャッシュから取得する。キャッシュにない場合は新規生成して保存する。
+//
+// Phase 4.1: 頂点座標は screenW/screenH に依存するため、画像サイズだけをキーにすると
+// ウィンドウ resize 後に古い座標の mesh を再利用してしまう。key には現在の
+// g.width/g.height も含める。
+func (g *Game) getMeshForImage(imgW, imgH int) *render.MeshGrid {
+	key := fmt.Sprintf("%d×%d@%d×%d", imgW, imgH, g.width, g.height)
+
+	g.meshCacheMu.RLock()
+	mesh, ok := g.meshCache[key]
+	g.meshCacheMu.RUnlock()
+	if ok {
+		return mesh
+	}
+
+	// キャッシュミス → 新規生成
+	mesh = render.GenerateFlatMesh(
+		float64(imgW), float64(imgH),
+		float64(g.width), float64(g.height),
+		1.0, // alpha は DrawMeshWithAlpha で後から設定
+	)
+
+	g.meshCacheMu.Lock()
+	g.meshCache[key] = mesh
+	g.meshCacheMu.Unlock()
+
+	return mesh
 }

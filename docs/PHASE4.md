@@ -1,6 +1,6 @@
 # GoTuber — Phase 4: Morph Renderer 詳細設計
 
-> **ステータス**: 未着手（Phase 3.6 depth map 生成は完了済み）
+> **ステータス**: Phase 4.0 / 4.1 実装完了、4.2-4.4 未着手（Phase 3.6 depth map 生成は完了済み）
 > **最終更新**: 2026-06-30
 > **親プラン**: [PLAN.md](./PLAN.md) v0.4.8
 
@@ -256,8 +256,8 @@ DoD:
 
 | Phase | 内容 | 状態 |
 |---|---|---|
-| 4.0 | Cell Transition αブレンド | 未着手 |
-| 4.1 | Mesh Renderer | 未着手 |
+| 4.0 | Cell Transition αブレンド | ✅ 実装完了 |
+| 4.1 | Mesh Renderer | ✅ 実装完了 |
 | 4.2 | Depth-weighted Elastic Morph | 未着手 |
 | 4.3 | Tweaks UI 追加（Morph ON/OFF、強度、transition duration） | 未着手 |
 | 4.4 | Performance tuning / fallback | 未着手 |
