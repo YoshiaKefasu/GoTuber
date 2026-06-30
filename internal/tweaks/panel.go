@@ -30,6 +30,22 @@ const (
 	sensitivitySliderMax = 200 // 20.0x
 )
 
+// Phase 4.3: Morph Strength スライダーの値域 (int、表示用)。
+// 内部表現 MorphStrength は 0.0..16.0 で保持し、スライダー値そのまま int。
+// 0 = morph 無効相当、8 = デフォルト控えめ、16 = 最大。
+const (
+	morphStrengthSliderMin = 0
+	morphStrengthSliderMax = 16
+)
+
+// Phase 4.3: Transition Duration スライダーの値域 (int ms、表示用)。
+// 内部表現 TransitionDuration は ms で保持し、game.go で /1000 して秒に変換。
+// 50..200ms。100ms が PHASE4.md 仕様値。
+const (
+	transitionDurationSliderMin = 50
+	transitionDurationSliderMax = 200
+)
+
 // Phase 2.8.1: game.CameraModeCamera と同じ値。
 // tweaks は game から import されるため、panel.go から game を import すると循環する。
 const panelCameraModeCamera = 1
@@ -84,6 +100,9 @@ type Panel struct {
 
 	// Phase 2.10.8: Camera Enabled トグル (checkbox 本体への参照)。
 	cameraCheck *widget.Checkbox
+
+	// Phase 4.3: Morph Strength 動的ラベル ("Morph Strength: 8.0px")
+	morphStrengthLabel *widget.Text
 
 	// Phase 1.14.16: 起動時 ComboBox 初期選択同期用。
 	// main.go が NewPanel に渡した initialDeviceID を保持。
@@ -435,6 +454,107 @@ func NewPanel(face *text.GoTextFace, state *State, audioEnabled bool, initialDev
 	// --- Phase 2.8: Camera Status + Manual Restart ---
 	root.AddChild(p.NewCameraSection(nil))
 
+	// --- Phase 4.3: Morph Renderer セクション ---
+	root.AddChild(widget.NewText(
+		widget.TextOpts.Text("Morph Renderer", facePtr, labelColorIdle),
+	))
+
+	// Morph ON/OFF トグル
+	initialMorph := widget.WidgetUnchecked
+	if state.MorphEnabled {
+		initialMorph = widget.WidgetChecked
+	}
+	morphCheck := widget.NewCheckbox(
+		widget.CheckboxOpts.WidgetOpts(widget.WidgetOpts.LayoutData(widget.RowLayoutData{
+			Position: widget.RowLayoutPositionStart,
+		})),
+		widget.CheckboxOpts.WidgetOpts(
+			// Phase 2.10.8 camera checkbox と同じ理由。
+			// NewNineSliceColor ベースの checkbox image は MinSize 未指定だと 0x0 になり、
+			// ラベルだけ見えてトグル本体が invisible になる。
+			widget.WidgetOpts.MinSize(16, 16),
+		),
+		widget.CheckboxOpts.Image(loadCheckboxImage()),
+		widget.CheckboxOpts.InitialState(initialMorph),
+		widget.CheckboxOpts.StateChangedHandler(func(args *widget.CheckboxChangedEventArgs) {
+			state.MorphEnabled = args.State == widget.WidgetChecked
+			state.Dirty = true
+		}),
+	)
+	morphRow := widget.NewContainer(
+		widget.ContainerOpts.Layout(widget.NewRowLayout(
+			widget.RowLayoutOpts.Direction(widget.DirectionHorizontal),
+			widget.RowLayoutOpts.Spacing(8),
+		)),
+	)
+	morphRow.AddChild(morphCheck)
+	morphRow.AddChild(widget.NewText(
+		widget.TextOpts.Text("Depth Morph", facePtr, labelColorIdle),
+	))
+	root.AddChild(morphRow)
+
+	// Morph Strength スライダー (0..16 px)
+	morphStrengthLabelText := widget.NewText(
+		widget.TextOpts.Text(morphStrengthLabelFmt(state), facePtr, labelColorIdle),
+	)
+	root.AddChild(morphStrengthLabelText)
+	p.morphStrengthLabel = morphStrengthLabelText
+
+	initialMorphStr := clampInt(int(state.MorphStrength), morphStrengthSliderMin, morphStrengthSliderMax)
+	morphStrSlider := widget.NewSlider(
+		widget.SliderOpts.Orientation(widget.DirectionHorizontal),
+		widget.SliderOpts.MinMax(morphStrengthSliderMin, morphStrengthSliderMax),
+		widget.SliderOpts.InitialCurrent(initialMorphStr),
+		widget.SliderOpts.WidgetOpts(widget.WidgetOpts.MinSize(200, 16)),
+		widget.SliderOpts.Images(
+			&widget.SliderTrackImage{
+				Idle:  image.NewNineSliceColor(color.NRGBA{0x33, 0x3a, 0x44, 0xff}),
+				Hover: image.NewNineSliceColor(color.NRGBA{0x33, 0x3a, 0x44, 0xff}),
+			},
+			&widget.ButtonImage{
+				Idle:    image.NewNineSliceColor(color.NRGBA{0x66, 0x8a, 0xbf, 0xff}),
+				Hover:   image.NewNineSliceColor(color.NRGBA{0x77, 0x9a, 0xcf, 0xff}),
+				Pressed: image.NewNineSliceColor(color.NRGBA{0x55, 0x7a, 0xaf, 0xff}),
+			},
+		),
+		widget.SliderOpts.FixedHandleSize(12),
+		widget.SliderOpts.ChangedHandler(func(args *widget.SliderChangedEventArgs) {
+			state.MorphStrength = float64(args.Current)
+			state.Dirty = true
+		}),
+	)
+	root.AddChild(morphStrSlider)
+
+	// Transition Duration スライダー (50..200 ms)
+	root.AddChild(widget.NewText(
+		widget.TextOpts.Text("Transition (ms)", facePtr, labelColorIdle),
+	))
+
+	initialTransDur := clampInt(int(state.TransitionDuration), transitionDurationSliderMin, transitionDurationSliderMax)
+	transDurSlider := widget.NewSlider(
+		widget.SliderOpts.Orientation(widget.DirectionHorizontal),
+		widget.SliderOpts.MinMax(transitionDurationSliderMin, transitionDurationSliderMax),
+		widget.SliderOpts.InitialCurrent(initialTransDur),
+		widget.SliderOpts.WidgetOpts(widget.WidgetOpts.MinSize(200, 16)),
+		widget.SliderOpts.Images(
+			&widget.SliderTrackImage{
+				Idle:  image.NewNineSliceColor(color.NRGBA{0x33, 0x3a, 0x44, 0xff}),
+				Hover: image.NewNineSliceColor(color.NRGBA{0x33, 0x3a, 0x44, 0xff}),
+			},
+			&widget.ButtonImage{
+				Idle:    image.NewNineSliceColor(color.NRGBA{0x66, 0x8a, 0xbf, 0xff}),
+				Hover:   image.NewNineSliceColor(color.NRGBA{0x77, 0x9a, 0xcf, 0xff}),
+				Pressed: image.NewNineSliceColor(color.NRGBA{0x55, 0x7a, 0xaf, 0xff}),
+			},
+		),
+		widget.SliderOpts.FixedHandleSize(12),
+		widget.SliderOpts.ChangedHandler(func(args *widget.SliderChangedEventArgs) {
+			state.TransitionDuration = float64(args.Current)
+			state.Dirty = true
+		}),
+	)
+	root.AddChild(transDurSlider)
+
 	// --- ヒント ---
 	root.AddChild(widget.NewText(
 		widget.TextOpts.Text("F1: Toggle Panel  |  Ctrl+Shift+H: Hide All UI", facePtr, labelColorDim),
@@ -773,6 +893,10 @@ func (p *Panel) Update() {
 		// ここでは state から読んで Label に再代入する。
 		p.micSensitivityLabel.Label = micSensitivityLabelText(p.state)
 	}
+	if p.morphStrengthLabel != nil {
+		// Phase 4.3: Morph Strength スライダー操作中の現在値を毎フレーム反映。
+		p.morphStrengthLabel.Label = morphStrengthLabelFmt(p.state)
+	}
 	if p.statusLabel != nil {
 		// Phase 1.14.16: status 表示更新。
 		// SetStatus で上書きされた statusMessage があればそれ、なければ state.Dirty から判定。
@@ -845,6 +969,12 @@ func gateStateLabel(gateOpen bool) string {
 // state.AudioSensitivity は 0.1 刻みで 10..200 → 1.0..20.0x の値域。
 func micSensitivityLabelText(state *State) string {
 	return fmt.Sprintf("Mic Sensitivity: %.1fx", state.AudioSensitivity)
+}
+
+// morphStrengthLabelFmt は "Morph Strength: 8.0px" 形式の動的ラベル文字列。
+// Phase 4.3: スライダー値を 1 桁小数で表示。min 0.0 / max 16.0。
+func morphStrengthLabelFmt(state *State) string {
+	return fmt.Sprintf("Morph Strength: %.1fpx", state.MorphStrength)
 }
 
 // Draw は panel を screen に描画する。

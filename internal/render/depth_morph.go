@@ -27,11 +27,6 @@ import (
 // ─── Morph 設定 ──────────────────────────────────────────────────────────────
 
 const (
-	// morphStrength は最大変位量（ピクセル）。
-	// 1200x1200 画像が ~648px に縮小されるため、控えめに 8px 程度。
-	// 過大だと輪郭が破綻する。Tweaks UI で調整可能にするのは Phase 4.3。
-	morphStrength = 8.0
-
 	// morphSmoothing は EMA の smoothing factor (0.0〜1.0)。
 	// 小さいほど追従が遅い（elastic になる）。
 	// 0.15 は「60fps で ~10 フレーム程度の遅延」に相当。
@@ -176,6 +171,7 @@ type MorphParams struct {
 	ElX     float64      // 現在の elastic 変位 X (スクリーンピクセル)
 	ElY     float64      // 現在の elastic 変位 Y (スクリーンピクセル)
 	Alpha   float64      // アルファ値 (0.0〜1.0)
+	Strength float64     // 最大変位量 (ピクセル)。0 なら morph 無効。
 }
 
 // GenerateMorphedMesh は depth map による頂点変位を適用したメッシュを生成する。
@@ -190,7 +186,7 @@ type MorphParams struct {
 func GenerateMorphedMesh(imgW, imgH, screenW, screenH float64, params MorphParams) *MeshGrid {
 	mesh := GenerateFlatMesh(imgW, imgH, screenW, screenH, params.Alpha)
 
-	if params.DepthMap == nil {
+	if params.DepthMap == nil || params.Strength == 0 {
 		return mesh
 	}
 
@@ -212,8 +208,8 @@ func GenerateMorphedMesh(imgW, imgH, screenW, screenH float64, params MorphParam
 		weight := edgeWeight(u, uv)
 
 		// 変位量 = depth * elastic * strength * weight
-		offsetX := depth * params.ElX * (morphStrength / 30.0) * weight
-		offsetY := depth * params.ElY * (morphStrength / 30.0) * weight
+		offsetX := depth * params.ElX * (params.Strength / 30.0) * weight
+		offsetY := depth * params.ElY * (params.Strength / 30.0) * weight
 
 		v.DstX += float32(offsetX)
 		v.DstY += float32(offsetY)

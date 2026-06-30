@@ -172,10 +172,11 @@ func TestGenerateMorphedMesh_UniformDepth(t *testing.T) {
 
 	flat := GenerateFlatMesh(1200, 1200, 1280, 720, 1.0)
 	morphed := GenerateMorphedMesh(1200, 1200, 1280, 720, MorphParams{
-		DepthMap: grey,
-		ElX:     5.0, // 右に 5px
-		ElY:     0,
-		Alpha:   1.0,
+		DepthMap:  grey,
+		ElX:      5.0, // 右に 5px
+		ElY:      0,
+		Alpha:    1.0,
+		Strength: 8.0, // Phase 4.3: デフォルト Strength
 	})
 
 	// 中央の頂点 (u=0.5, v=0.5) は edgeWeight ≈ 0 なので変位がほぼ 0

@@ -223,10 +223,13 @@ func TestTweaksConfig_ApplyTo_ZeroValueSkip(t *testing.T) {
 		AudioEnabled:        true,
 		AudioSensitivity:    10.0,
 		CameraEnabled:       true,
+		MorphEnabled:        true,
+		MorphStrength:       8.0,
+		TransitionDuration:  100.0,
 	}
 
 	// 全フィールドゼロ値 / nil の TweaksConfig を ApplyTo
-	tc := &TweaksConfig{} // MouseResponsiveness=0, BlinkEnabled=nil, MouthEnabled=nil, MicSensitivity=0, CameraEnabled=nil
+	tc := &TweaksConfig{}
 	tc.ApplyTo(state)
 
 	// ゼロ値 / nil skip: 全永続化フィールドがデフォルトのまま
@@ -244,6 +247,15 @@ func TestTweaksConfig_ApplyTo_ZeroValueSkip(t *testing.T) {
 	}
 	if !state.CameraEnabled {
 		t.Errorf("CameraEnabled should remain true (TOML キー欠落 = skip), got false")
+	}
+	if !state.MorphEnabled {
+		t.Errorf("MorphEnabled should remain true (TOML キー欠落 = skip), got false")
+	}
+	if state.MorphStrength != 8.0 {
+		t.Errorf("MorphStrength should remain 8.0, got %v", state.MorphStrength)
+	}
+	if state.TransitionDuration != 100.0 {
+		t.Errorf("TransitionDuration should remain 100.0, got %v", state.TransitionDuration)
 	}
 }
 
@@ -287,6 +299,9 @@ func TestTweaksConfig_CaptureFrom(t *testing.T) {
 		AudioEnabled:        false,
 		AudioSensitivity:    15.0,
 		CameraEnabled:       false,
+		MorphEnabled:        true,
+		MorphStrength:       0,
+		TransitionDuration:  150.0,
 	}
 
 	tc := &TweaksConfig{}
@@ -306,5 +321,29 @@ func TestTweaksConfig_CaptureFrom(t *testing.T) {
 	}
 	if tc.CameraEnabled == nil || *tc.CameraEnabled {
 		t.Errorf("CameraEnabled: got %v want false pointer", tc.CameraEnabled)
+	}
+	if tc.MorphEnabled == nil || *tc.MorphEnabled != true {
+		t.Errorf("MorphEnabled: got %v want true pointer", tc.MorphEnabled)
+	}
+	if tc.MorphStrength == nil || *tc.MorphStrength != 0 {
+		t.Errorf("MorphStrength: got %v want 0 pointer", tc.MorphStrength)
+	}
+	if tc.TransitionDuration != 150.0 {
+		t.Errorf("TransitionDuration: got %v want 150.0", tc.TransitionDuration)
+	}
+}
+
+func TestTweaksConfig_MorphStrengthZeroPersists(t *testing.T) {
+	state := &tweaks.State{MorphStrength: 0}
+	tc := &TweaksConfig{}
+	tc.CaptureFrom(state)
+	if tc.MorphStrength == nil || *tc.MorphStrength != 0 {
+		t.Fatalf("CaptureFrom MorphStrength: got %v want 0 pointer", tc.MorphStrength)
+	}
+
+	loadedState := &tweaks.State{MorphStrength: 8.0}
+	tc.ApplyTo(loadedState)
+	if loadedState.MorphStrength != 0 {
+		t.Fatalf("ApplyTo MorphStrength: got %v want 0", loadedState.MorphStrength)
 	}
 }

@@ -79,6 +79,15 @@ type TweaksConfig struct {
 	// nil なら ApplyTo skip (State のデフォルト true を保持)。
 	// 非 nil なら *b の値を State に上書き (明示的 OFF を尊重)。
 	CameraEnabled *bool `toml:"camera_enabled"`
+
+	// Phase 4.3: Morph Renderer 設定
+	// MorphEnabled: depth-weighted elastic morph 有効化。*bool で nil と false を区別。
+	MorphEnabled *bool `toml:"morph_enabled"`
+	// MorphStrength: 最大変位量 (ピクセル)。0.0..16.0。
+	// 0.0 は有効なユーザー設定なので *float64 で nil (キー欠落) と区別する。
+	MorphStrength *float64 `toml:"morph_strength"`
+	// TransitionDuration: セル切り替え α ブレンド期間 (ms)。50..200。ゼロ値は skip。
+	TransitionDuration float64 `toml:"transition_duration"`
 }
 
 // Path は設定ファイルの絶対パスを返す。
@@ -170,9 +179,19 @@ func (t *TweaksConfig) ApplyTo(state *tweaks.State) {
 	if t.CameraEnabled != nil {
 		state.CameraEnabled = *t.CameraEnabled
 	}
+	// Phase 4.3: Morph Renderer 設定
+	if t.MorphEnabled != nil {
+		state.MorphEnabled = *t.MorphEnabled
+	}
+	if t.MorphStrength != nil {
+		state.MorphStrength = *t.MorphStrength
+	}
+	if t.TransitionDuration != 0 {
+		state.TransitionDuration = t.TransitionDuration
+	}
 }
 
-// CaptureFrom は state の 5 フィールドを TOML 書き込み対象としてコピーする。
+// CaptureFrom は state のフィールドを TOML 書き込み対象としてコピーする。
 // Save ボタン押下時に main.go から呼ばれる。
 //
 // Phase 1.14.16: BlinkEnabled / MouthEnabled は *bool として必ずコピー (nil にしない)。
@@ -180,6 +199,7 @@ func (t *TweaksConfig) ApplyTo(state *tweaks.State) {
 // と「TOML 欠落」を区別する必要はない。State の bool をそのまま & でラップ。
 //
 // Phase 2.10.8: CameraEnabled を追加。
+// Phase 4.3: MorphEnabled / MorphStrength / TransitionDuration を追加。
 func (t *TweaksConfig) CaptureFrom(state *tweaks.State) {
 	t.MouseResponsiveness = state.MouseResponsiveness
 	blinkVal := state.BlinkEnabled
@@ -189,4 +209,10 @@ func (t *TweaksConfig) CaptureFrom(state *tweaks.State) {
 	t.MicSensitivity = state.AudioSensitivity
 	cameraVal := state.CameraEnabled
 	t.CameraEnabled = &cameraVal
+	// Phase 4.3
+	morphVal := state.MorphEnabled
+	t.MorphEnabled = &morphVal
+	morphStrengthVal := state.MorphStrength
+	t.MorphStrength = &morphStrengthVal
+	t.TransitionDuration = state.TransitionDuration
 }

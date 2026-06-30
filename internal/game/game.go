@@ -189,12 +189,12 @@ type Game struct {
 	// ─── Phase 4.0: Cell Transition α-blend ───────────────────────────────
 
 	// transEnabled はセル切り替え時の α ブレンド遷移を有効にするか。
-	// デフォルト true。Tweaks UI からの切替は Phase 4.3 で実装予定。
+	// デフォルト true。Tweaks UI からの切替は Phase 4.3 で実装済み。
 	// ここを false にすると従来通りの即時切り替えに戻る。
 	transEnabled bool
 
 	// transDuration は遷移期間 (秒)。PHASE4.md 仕様値 100ms = 0.1s。
-	// 将来 Tweaks UI で 80〜120ms 範囲で調整可能にする予定 (Phase 4.3)。
+	// Phase 4.3: Tweaks UI で 50〜200ms 範囲で調整可能。毎フレーム state から反映。
 	transDuration float64
 
 	// trans は現在の遷移状態。updateTransition() で毎フレーム更新。
@@ -399,6 +399,11 @@ func (g *Game) Update() error {
 
 	// Phase 4.0: セル遷移 α-blend — セル変化検出 + 進行度更新
 	// eyesClosed / mouthState が確定した後に計算する。
+	// Phase 4.3: Tweaks UI の TransitionDuration (ms) を毎フレーム反映。
+	g.transDuration = g.tweaks.TransitionDuration / 1000.0 // ms → sec
+	if g.transDuration < 0.01 {
+		g.transDuration = 0.01 // 最小 10ms
+	}
 	if g.transEnabled {
 		now := time.Now()
 		var deltaSec float64
@@ -520,19 +525,24 @@ func (g *Game) Draw(screen *ebiten.Image) {
 // drawMeshWithAlpha は画像をメッシュ経由で指定 alpha で screen に描画する。
 // Phase 4.1: DrawTriangles ベースの描画パス。
 // Phase 4.2: depth map がある場合は elastic morph を適用したメッシュを生成。
+// Phase 4.3: MorphEnabled=false または MorphStrength=0 なら flat mesh fallback。
 func (g *Game) drawMeshWithAlpha(screen, img *ebiten.Image, alpha float64, depthMap *image.Gray, hasDepth bool) {
 	if img == nil {
 		return
 	}
 	iw, ih := img.Bounds().Dx(), img.Bounds().Dy()
 
-	if hasDepth && depthMap != nil {
+	// Phase 4.3: MorphEnabled=false または MorphStrength=0 なら flat mesh 強制
+	morphOk := g.tweaks.MorphEnabled && g.tweaks.MorphStrength > 0 && hasDepth && depthMap != nil
+
+	if morphOk {
 		// Phase 4.2: depth-weighted elastic morph メッシュ
 		params := render.MorphParams{
-			DepthMap: depthMap,
-			ElX:     g.morphElastic.ElX,
-			ElY:     g.morphElastic.ElY,
-			Alpha:   alpha,
+			DepthMap:  depthMap,
+			ElX:      g.morphElastic.ElX,
+			ElY:      g.morphElastic.ElY,
+			Alpha:    alpha,
+			Strength: g.tweaks.MorphStrength,
 		}
 		mesh := render.GenerateMorphedMesh(
 			float64(iw), float64(ih),

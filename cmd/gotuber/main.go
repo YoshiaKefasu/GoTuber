@@ -224,7 +224,7 @@ func main() {
 			log.Printf("config save failed: %v", err)
 			return err
 		}
-		log.Printf("config saved: tweaks.* (%d fields captured)", 5)
+		log.Printf("config saved: tweaks.* (%d fields captured)", 8)
 		return nil
 	})
 

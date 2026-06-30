@@ -42,6 +42,19 @@ type State struct {
 	CameraMode        string // "Mouse" / "Active" / "Lost Signal" / "Down"
 	CameraRestartable bool   // 全状態で true、Restart ボタン常時有効化用
 
+	// Phase 4.3: Morph Renderer 設定
+	// MorphEnabled は depth-weighted elastic morph を有効にするか。
+	// false なら flat mesh fallback (depth map があっても morph なし)。
+	MorphEnabled bool
+
+	// MorphStrength は最大変位量（ピクセル）。
+	// 0.0 で morph 無効相当、8.0 がデフォルト控えめ設定、16.0 まで。
+	MorphStrength float64
+
+	// TransitionDuration はセル切り替え α ブレンドの遷移期間 (ms)。
+	// 50..200ms 範囲。内部では秒に変換して game.transDuration に反映。
+	TransitionDuration float64
+
 	// UI 表示
 	PanelVisible bool // F1 で toggle
 
@@ -70,6 +83,9 @@ func NewState() *State {
 		// Phase 1.14.15: 15.0x → 10.0x に下げる (詳細は PHASE1.md Section 13.7 参照)。
 		AudioSensitivity:  10.0,
 		CameraEnabled:     true, // Phase 2.10.8: デフォルト ON
+		MorphEnabled:      true, // Phase 4.3: デフォルト ON
+		MorphStrength:     8.0,  // Phase 4.3: 控えめ 8px
+		TransitionDuration: 100.0, // Phase 4.3: 100ms (PHASE4.md 仕様値)
 		CameraMode:        "Mouse",
 		CameraRestartable: false,
 		PanelVisible:      false,
@@ -88,5 +104,8 @@ func (s *State) ResetToDefaults() {
 	s.BlinkEnabled = true
 	s.AudioEnabled = true
 	s.AudioSensitivity = 10.0
-	s.CameraEnabled = true // Phase 2.10.8
+	s.CameraEnabled = true   // Phase 2.10.8
+	s.MorphEnabled = true    // Phase 4.3
+	s.MorphStrength = 8.0    // Phase 4.3
+	s.TransitionDuration = 100.0 // Phase 4.3
 }

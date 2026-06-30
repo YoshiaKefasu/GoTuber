@@ -40,6 +40,16 @@ func TestState_Defaults(t *testing.T) {
 	if !s.CameraEnabled {
 		t.Errorf("expected CameraEnabled=true (Phase 2.10.8 default), got false")
 	}
+	// Phase 4.3: Morph フィールドのデフォルト値
+	if !s.MorphEnabled {
+		t.Errorf("expected MorphEnabled=true (Phase 4.3 default), got false")
+	}
+	if s.MorphStrength != 8.0 {
+		t.Errorf("expected MorphStrength=8.0 (Phase 4.3 default), got %v", s.MorphStrength)
+	}
+	if s.TransitionDuration != 100.0 {
+		t.Errorf("expected TransitionDuration=100.0 (Phase 4.3 default), got %v", s.TransitionDuration)
+	}
 	if s.PanelVisible {
 		t.Errorf("expected PanelVisible=false, got true")
 	}
@@ -160,6 +170,19 @@ func TestSliderConstants(t *testing.T) {
 	if sensitivitySliderMax != 200 {
 		t.Errorf("sensitivitySliderMax (%d) should be 200 (representing 20.0x)", sensitivitySliderMax)
 	}
+	// Phase 4.3: Morph slider 定数
+	if morphStrengthSliderMin != 0 {
+		t.Errorf("morphStrengthSliderMin (%d) should be 0", morphStrengthSliderMin)
+	}
+	if morphStrengthSliderMax != 16 {
+		t.Errorf("morphStrengthSliderMax (%d) should be 16", morphStrengthSliderMax)
+	}
+	if transitionDurationSliderMin != 50 {
+		t.Errorf("transitionDurationSliderMin (%d) should be 50", transitionDurationSliderMin)
+	}
+	if transitionDurationSliderMax != 200 {
+		t.Errorf("transitionDurationSliderMax (%d) should be 200", transitionDurationSliderMax)
+	}
 }
 
 func TestMicSensitivityLabelText(t *testing.T) {
@@ -171,6 +194,23 @@ func TestMicSensitivityLabelText(t *testing.T) {
 	s.AudioSensitivity = 7.5
 	if got, want := micSensitivityLabelText(s), "Mic Sensitivity: 7.5x"; got != want {
 		t.Errorf("micSensitivityLabelText() = %q, want %q", got, want)
+	}
+}
+
+// TestMorphStrengthLabelFmt は Morph Strength ラベルのフォーマット確認 (Phase 4.3)。
+func TestMorphStrengthLabelFmt(t *testing.T) {
+	s := NewState()
+	s.MorphStrength = 8.0
+	if got, want := morphStrengthLabelFmt(s), "Morph Strength: 8.0px"; got != want {
+		t.Errorf("morphStrengthLabelFmt() = %q, want %q", got, want)
+	}
+	s.MorphStrength = 0.0
+	if got, want := morphStrengthLabelFmt(s), "Morph Strength: 0.0px"; got != want {
+		t.Errorf("morphStrengthLabelFmt() = %q, want %q", got, want)
+	}
+	s.MorphStrength = 12.5
+	if got, want := morphStrengthLabelFmt(s), "Morph Strength: 12.5px"; got != want {
+		t.Errorf("morphStrengthLabelFmt() = %q, want %q", got, want)
 	}
 }
 
@@ -560,5 +600,74 @@ func TestNewPanel_CameraEnabledDefaultChecked(t *testing.T) {
 	panel := NewPanel(face, state, true, "")
 	if panel == nil {
 		t.Fatal("expected non-nil panel")
+	}
+}
+
+// === Phase 4.3: Morph Renderer UI tests ===
+
+// TestState_MorphDefaults は Morph フィールドのデフォルト値を確認。
+func TestState_MorphDefaults(t *testing.T) {
+	s := NewState()
+	if !s.MorphEnabled {
+		t.Error("MorphEnabled should default to true")
+	}
+	if s.MorphStrength != 8.0 {
+		t.Errorf("MorphStrength should default to 8.0, got %v", s.MorphStrength)
+	}
+	if s.TransitionDuration != 100.0 {
+		t.Errorf("TransitionDuration should default to 100.0, got %v", s.TransitionDuration)
+	}
+}
+
+// TestNewPanel_MorphUI は Morph UI が構築されることを確認。
+func TestNewPanel_MorphUI(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("NewPanel panicked with morph UI: %v", r)
+		}
+	}()
+	face := LoadFontFace(16)
+	state := NewState()
+	panel := NewPanel(face, state, true, "")
+	if panel == nil {
+		t.Fatal("expected non-nil panel")
+	}
+	if panel.morphStrengthLabel == nil {
+		t.Error("morphStrengthLabel should be created in NewPanel")
+	}
+}
+
+// TestNewPanel_MorphEnabledFalse は MorphEnabled=false で
+// パネルが正しく構築されることを確認。
+func TestNewPanel_MorphEnabledFalse(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("NewPanel panicked: %v", r)
+		}
+	}()
+	face := LoadFontFace(16)
+	state := NewState()
+	state.MorphEnabled = false
+	panel := NewPanel(face, state, true, "")
+	if panel == nil {
+		t.Fatal("expected non-nil panel even with MorphEnabled=false")
+	}
+}
+
+// TestResetToDefaults_ResetsMorphFields は ResetToDefaults が Morph フィールドもリセットすることを確認。
+func TestResetToDefaults_ResetsMorphFields(t *testing.T) {
+	s := NewState()
+	s.MorphEnabled = false
+	s.MorphStrength = 12.0
+	s.TransitionDuration = 150.0
+	s.ResetToDefaults()
+	if !s.MorphEnabled {
+		t.Error("ResetToDefaults should set MorphEnabled=true")
+	}
+	if s.MorphStrength != 8.0 {
+		t.Errorf("ResetToDefaults should set MorphStrength=8.0, got %v", s.MorphStrength)
+	}
+	if s.TransitionDuration != 100.0 {
+		t.Errorf("ResetToDefaults should set TransitionDuration=100.0, got %v", s.TransitionDuration)
 	}
 }
