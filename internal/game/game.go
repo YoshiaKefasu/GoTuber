@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -229,6 +230,20 @@ type Game struct {
 	// morphDepthPath は現在のセルに対応する depth map パス。
 	// セルが変わったときだけ再計算。空なら flat mesh fallback。
 	morphDepthPath string
+
+	// ─── Phase 4.4: Performance tuning / fallback ──────────────────────
+
+	// morphMeshCache は elastic 変位を量子化したキーで morphed mesh をキャッシュする。
+	// キー: "imgW×imgH@screenW×screenH#qElX×qElY#strength#depthPath"。
+	// 量子化: elastic 変位を 0.5px 刻みに丸め、近いフレームで再利用する。
+	morphMeshCacheMu sync.RWMutex
+	morphMeshCache   map[string]*render.MeshGrid
+
+	// fpsTracking は FPS 自動 fallback のための測定状態。
+	fpsFrameCount   int
+	fpsLastCheck    time.Time
+	fpsCurrentAvg   float64 // 直近 1 秒の平均 FPS
+	morphAutoDisable bool   // FPS 低下時に一時的に morph を無効化
 }
 
 // New は新しい Game を作成する。
@@ -265,6 +280,8 @@ func New(
 		firstCellSet:   false,
 		firstDrawPassed: false,
 		meshCache:      make(map[string]*render.MeshGrid),
+		morphMeshCache: make(map[string]*render.MeshGrid),
+		fpsLastCheck:   time.Now(),
 	}
 }
 
@@ -440,6 +457,29 @@ func (g *Game) Update() error {
 	if killswitch.Triggered() {
 		return ebiten.Termination
 	}
+
+	// ─── Phase 4.4: FPS tracking for auto-fallback ────────────────────
+	g.fpsFrameCount++
+	now := time.Now()
+	elapsed := now.Sub(g.fpsLastCheck).Seconds()
+	if elapsed >= 1.0 {
+		g.fpsCurrentAvg = float64(g.fpsFrameCount) / elapsed
+		g.fpsFrameCount = 0
+		g.fpsLastCheck = now
+
+		// FPS が 24 を下回ったら morph を一時無効化（配信品質保護）
+		// 30 を超えたら再有効化（滞后防止のヒステリシス）
+		if g.tweaks.MorphEnabled {
+			if g.fpsCurrentAvg < 24.0 {
+				g.morphAutoDisable = true
+			} else if g.fpsCurrentAvg > 30.0 {
+				g.morphAutoDisable = false
+			}
+		} else {
+			g.morphAutoDisable = false
+		}
+	}
+
 	return nil
 }
 
@@ -466,21 +506,29 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	// 遷移中でない場合は従来通り 1 枚描画。
 	// Phase 4.1: DrawImage から DrawTriangles (メッシュレンダリング) に切替。
 	// Phase 4.2: depth map があるセルは elastic morph を適用。
+	// Phase 4.4: morph 不要な場合は depth map 読み込みをスキップ。
 
 	// Phase 4.2: elastic morph target 計算
+	// Phase 4.4: morph が完全に無効なら elastic 更新自体をスキップ（EMA 計算省力）
+	morphPossible := g.tweaks.MorphEnabled && !g.morphAutoDisable && g.tweaks.MorphStrength > 0
 
-	// elastic morph: mouse current から target 変位を計算
-	// mouse.Current() は [-1, 1] の正規化座標。これをスクリーンピクセルに変換。
 	targetElX := 0.0
 	targetElY := 0.0
-	if g.mouse != nil {
+	if morphPossible && g.mouse != nil {
 		mx, my := g.mouse.Current()
-		// maxDisplacement: 画面幅/高さの 0.4% を最大変位とする
-		// 1280x720 → max ~5px, 控えめだが視認可能な効果
 		targetElX = mx * float64(g.width) * 0.004
 		targetElY = my * float64(g.height) * 0.004
 	}
-	render.UpdateMorphElastic(&g.morphElastic, targetElX, targetElY)
+	if morphPossible {
+		render.UpdateMorphElastic(&g.morphElastic, targetElX, targetElY)
+	}
+
+	// Phase 4.4: depth map 読み込みは morph が有効なときだけ。
+	// morph=false の場合、drawMeshWithAlpha は flat mesh パスしか取らないため、
+	// depth load + RWMutex lock + string key lookup を完全にスキップできる。
+	var fromDepthMap, toDepthMap *image.Gray
+	var fromHasDepth, toHasDepth bool
+	var fromDepthPath, toDepthPath string
 
 	if g.transEnabled && g.trans.active {
 		// 遷移元 (フェードアウト)
@@ -488,33 +536,38 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		// 遷移先 (フェードイン)
 		toImg, toOk := g.atlas.Get(sheetIdx, row, col)
 
-		// 旧セル / 新セルは別セルの可能性があるので、depth map も個別に読む。
-		// 共通化すると from 側が to 側の depth で変形し、輪郭崩れが出る。
-		fromDepthPath := ""
-		if fromSheetName := g.atlas.SheetName(g.trans.fromSheet); fromSheetName != "" {
-			fromDepthPath = g.atlas.DepthMapPath(fromSheetName, g.trans.fromRow, g.trans.fromCol)
-		}
-		fromDepthMap, fromHasDepth := render.LoadDepthMap(fromDepthPath)
+		if morphPossible {
+			// 旧セル / 新セルは別セルの可能性があるので、depth map も個別に読む。
+			fromDepthPath = ""
+			if fromSheetName := g.atlas.SheetName(g.trans.fromSheet); fromSheetName != "" {
+				fromDepthPath = g.atlas.DepthMapPath(fromSheetName, g.trans.fromRow, g.trans.fromCol)
+			}
+			fromDepthMap, fromHasDepth = render.LoadDepthMap(fromDepthPath)
 
-		toDepthPath := g.atlas.DepthMapPath(sheetName, row, col)
-		toDepthMap, toHasDepth := render.LoadDepthMap(toDepthPath)
+			toDepthPath = g.atlas.DepthMapPath(sheetName, row, col)
+			toDepthMap, toHasDepth = render.LoadDepthMap(toDepthPath)
+		}
 
 		if fromOk && fromImg != nil {
-			g.drawMeshWithAlpha(screen, fromImg, 1.0-g.trans.progress, fromDepthMap, fromHasDepth)
+			g.drawMeshWithAlpha(screen, fromImg, 1.0-g.trans.progress, fromDepthMap, fromHasDepth, fromDepthPath)
 		}
 		if toOk && toImg != nil {
-			g.drawMeshWithAlpha(screen, toImg, g.trans.progress, toDepthMap, toHasDepth)
+			g.drawMeshWithAlpha(screen, toImg, g.trans.progress, toDepthMap, toHasDepth, toDepthPath)
 		}
 	} else {
-		depthPath := g.atlas.DepthMapPath(sheetName, row, col)
-		depthMap, hasDepth := render.LoadDepthMap(depthPath)
 		// 従来通り: 単一画像を 100% alpha で描画
 		img, ok := g.atlas.Get(sheetIdx, row, col)
 		if !ok || img == nil {
 			return
 		}
 
-		g.drawMeshWithAlpha(screen, img, 1.0, depthMap, hasDepth)
+		depthPath := ""
+		if morphPossible {
+			depthPath = g.atlas.DepthMapPath(sheetName, row, col)
+			toDepthMap, toHasDepth = render.LoadDepthMap(depthPath)
+		}
+
+		g.drawMeshWithAlpha(screen, img, 1.0, toDepthMap, toHasDepth, depthPath)
 	}
 
 	if !g.uiHidden && g.tweaks.PanelVisible {
@@ -526,35 +579,78 @@ func (g *Game) Draw(screen *ebiten.Image) {
 // Phase 4.1: DrawTriangles ベースの描画パス。
 // Phase 4.2: depth map がある場合は elastic morph を適用したメッシュを生成。
 // Phase 4.3: MorphEnabled=false または MorphStrength=0 なら flat mesh fallback。
-func (g *Game) drawMeshWithAlpha(screen, img *ebiten.Image, alpha float64, depthMap *image.Gray, hasDepth bool) {
+// Phase 4.4: morphed mesh キャッシュ + FPS 自動 fallback。
+func (g *Game) drawMeshWithAlpha(screen, img *ebiten.Image, alpha float64, depthMap *image.Gray, hasDepth bool, depthPath string) {
 	if img == nil {
 		return
 	}
 	iw, ih := img.Bounds().Dx(), img.Bounds().Dy()
 
-	// Phase 4.3: MorphEnabled=false または MorphStrength=0 なら flat mesh 強制
-	morphOk := g.tweaks.MorphEnabled && g.tweaks.MorphStrength > 0 && hasDepth && depthMap != nil
+	// Phase 4.4: MorphEnabled=false / MorphStrength=0 / FPS fallback → flat mesh 強制
+	morphOk := g.tweaks.MorphEnabled && !g.morphAutoDisable && g.tweaks.MorphStrength > 0 && hasDepth && depthMap != nil
 
 	if morphOk {
-		// Phase 4.2: depth-weighted elastic morph メッシュ
-		params := render.MorphParams{
-			DepthMap:  depthMap,
-			ElX:      g.morphElastic.ElX,
-			ElY:      g.morphElastic.ElY,
-			Alpha:    alpha,
-			Strength: g.tweaks.MorphStrength,
-		}
-		mesh := render.GenerateMorphedMesh(
-			float64(iw), float64(ih),
-			float64(g.width), float64(g.height),
-			params,
-		)
+		mesh := g.getMorphedMesh(iw, ih, depthMap, depthPath, alpha)
+		// Phase 4.4: morphed mesh cache は形状再利用が目的で、alpha は draw ごとに変わる。
+		// 遷移中は old/new セルで異なる alpha を使うため、cached mesh を取得した後に
+		// 毎回明示的に上書きする。これをしないと前フレームの alpha が残留する。
+		// SAFETY: SetAlpha は cached mesh をその場で変更する。Ebitengine の Draw() は
+		// 単一 goroutine 前提なので現在は安全。将来 parallel rendering を入れるなら
+		// per-draw copy へ切り替える必要がある。
+		mesh.SetAlpha(float32(alpha))
 		render.DrawMesh(screen, img, mesh)
 	} else {
 		// Phase 4.1 fallback: フラットメッシュ
 		mesh := g.getMeshForImage(iw, ih)
 		render.DrawMeshWithAlpha(screen, img, mesh, float32(alpha))
 	}
+}
+
+// getMorphedMesh は elastic 変位を量子化したキーで morphed mesh をキャッシュから取得する。
+// キャッシュミスの場合だけ GenerateMorphedMesh を呼び出し、結果を保存する。
+//
+// 量子化: elastic 変位を 0.5px 刻みに丸めることで、連続フレーム間の
+// 微小変化による再生成を防ぐ。0.5px 未満の差は視認できない。
+func (g *Game) getMorphedMesh(imgW, imgH int, depthMap *image.Gray, depthPath string, alpha float64) *render.MeshGrid {
+	// elastic 変位を 0.5px 刻みに量子化
+	qElX := math.Round(g.morphElastic.ElX*2.0) / 2.0
+	qElY := math.Round(g.morphElastic.ElY*2.0) / 2.0
+
+	key := fmt.Sprintf("%d×%d@%d×%d#%.1f×%.1f#%.1f#%s",
+		imgW, imgH, g.width, g.height,
+		qElX, qElY, g.tweaks.MorphStrength, depthPath)
+
+	g.morphMeshCacheMu.RLock()
+	mesh, ok := g.morphMeshCache[key]
+	g.morphMeshCacheMu.RUnlock()
+	if ok {
+		return mesh
+	}
+
+	// キャッシュミス → 新規生成
+	params := render.MorphParams{
+		DepthMap:  depthMap,
+		ElX:      g.morphElastic.ElX,
+		ElY:      g.morphElastic.ElY,
+		Alpha:    1.0,
+		Strength: g.tweaks.MorphStrength,
+	}
+	mesh = render.GenerateMorphedMesh(
+		float64(imgW), float64(imgH),
+		float64(g.width), float64(g.height),
+		params,
+	)
+
+	// キャッシュサイズ制限: 256 エントリを超えたら全消去（LRU は YAGNI）。
+	// depthPath をキーに含めるため、32 だと通常のマウス移動だけでもすぐ溢れやすい。
+	g.morphMeshCacheMu.Lock()
+	if len(g.morphMeshCache) > 256 {
+		g.morphMeshCache = make(map[string]*render.MeshGrid)
+	}
+	g.morphMeshCache[key] = mesh
+	g.morphMeshCacheMu.Unlock()
+
+	return mesh
 }
 
 // currentCell は現在の camera mode に応じた atlas cell を返す。

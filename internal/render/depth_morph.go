@@ -66,7 +66,7 @@ var (
 // LoadDepthMap は depth map PNG を grayscale として読み込み、キャッシュする。
 // キャッシュにある場合はディスク I/O なしで返す。
 //
-// depth map が存在しない/読めない場合は (nil, false) を返す。
+// depth map が存在しない/読めない/サイズ異常の場合は (nil, false) を返す。
 // 呼び出し側は false のとき flat mesh に fallback する。
 func LoadDepthMap(path string) (*image.Gray, bool) {
 	if path == "" {
@@ -90,6 +90,13 @@ func LoadDepthMap(path string) (*image.Gray, bool) {
 
 	img, _, err := image.Decode(f)
 	if err != nil {
+		return nil, false
+	}
+
+	// Phase 4.4: サイズ検証 — 1x1 未満 or 4096 超は depth map として不正
+	bounds := img.Bounds()
+	w, h := bounds.Dx(), bounds.Dy()
+	if w < 1 || h < 1 || w > 4096 || h > 4096 {
 		return nil, false
 	}
 
@@ -174,6 +181,22 @@ type MorphParams struct {
 	Strength float64     // 最大変位量 (ピクセル)。0 なら morph 無効。
 }
 
+// edgeWeightTable は (VertexCount × VertexCount) の事前計算済み重みテーブル。
+// メッシュ生成ごとに sqrt を繰り返さないため、グローバルに 1 回だけ計算する。
+// インデックス: y*VertexCount + x で各頂点の重み。
+var edgeWeightTable []float64
+
+func init() {
+	edgeWeightTable = make([]float64, VertexCount*VertexCount)
+	for y := 0; y <= GridSize; y++ {
+		for x := 0; x <= GridSize; x++ {
+			u := float64(x) / float64(GridSize)
+			v := float64(y) / float64(GridSize)
+			edgeWeightTable[y*VertexCount+x] = edgeWeight(u, v)
+		}
+	}
+}
+
 // GenerateMorphedMesh は depth map による頂点変位を適用したメッシュを生成する。
 //
 // 処理:
@@ -190,6 +213,8 @@ func GenerateMorphedMesh(imgW, imgH, screenW, screenH float64, params MorphParam
 		return mesh
 	}
 
+	strengthScale := params.Strength / 30.0
+
 	// flat mesh の頂点座標をコピーして変位を適用
 	for i := range mesh.Vertices {
 		v := &mesh.Vertices[i]
@@ -201,15 +226,12 @@ func GenerateMorphedMesh(imgW, imgH, screenW, screenH float64, params MorphParam
 		// depth map から深度値をサンプリング
 		depth := SampleDepth(params.DepthMap, u, uv)
 
-		// 画面全体が平行移動しないよう、追加重みを適用
-		//   - 中央 (u=0.5, v=0.5): weight ≈ 0.0 (ほぼ動かない)
-		//   - 周辺 (u/v=0 or 1):   weight ≈ 1.0 (最大変位)
-		//   - 顔の中央付近は動かしすぎない
-		weight := edgeWeight(u, uv)
+		// 事前計算済みの重みテーブルから取得 (sqrt 回避)
+		weight := edgeWeightTable[i]
 
 		// 変位量 = depth * elastic * strength * weight
-		offsetX := depth * params.ElX * (params.Strength / 30.0) * weight
-		offsetY := depth * params.ElY * (params.Strength / 30.0) * weight
+		offsetX := depth * params.ElX * strengthScale * weight
+		offsetY := depth * params.ElY * strengthScale * weight
 
 		v.DstX += float32(offsetX)
 		v.DstY += float32(offsetY)

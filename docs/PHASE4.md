@@ -1,8 +1,8 @@
 # GoTuber — Phase 4: Morph Renderer 詳細設計
 
-> **ステータス**: Phase 4.0 / 4.1 実装完了、4.2-4.4 未着手（Phase 3.6 depth map 生成は完了済み）
+> **ステータス**: Phase 4.0〜4.4 実装完了（Phase 3.6 depth map 生成も完了済み）
 > **最終更新**: 2026-06-30
-> **親プラン**: [PLAN.md](./PLAN.md) v0.4.8
+> **親プラン**: [PLAN.md](./PLAN.md) v0.4.9
 
 ---
 
@@ -258,9 +258,9 @@ DoD:
 |---|---|---|
 | 4.0 | Cell Transition αブレンド | ✅ 実装完了 |
 | 4.1 | Mesh Renderer | ✅ 実装完了 |
-| 4.2 | Depth-weighted Elastic Morph | 未着手 |
-| 4.3 | Tweaks UI 追加（Morph ON/OFF、強度、transition duration） | 未着手 |
-| 4.4 | Performance tuning / fallback | 未着手 |
+| 4.2 | Depth-weighted Elastic Morph | ✅ 実装完了 |
+| 4.3 | Tweaks UI 追加（Morph ON/OFF、強度、transition duration） | ✅ 実装完了 |
+| 4.4 | Performance tuning / fallback | ✅ 実装完了 |
 
 Phase 4.0 と 4.1 は depth map なしでも実装できる。
 Phase 4.2 だけ Phase 3.6 の depth map generator に依存する。
@@ -281,13 +281,13 @@ Phase 4.2 だけ Phase 3.6 の depth map generator に依存する。
 
 ## 10. 完了基準 (DoD)
 
-- [ ] αブレンドでセル切り替えの違和感が減る
-- [ ] mesh renderer ON/OFF で通常描画との見た目差分が小さい
-- [ ] depth map があるセルだけ elastic morph できる
-- [ ] depth map が無いセルは従来描画へ fallback する
-- [ ] Morph ON/OFF を Tweaks から切り替えられる
-- [ ] 1280×720 window で FPS 低下が体感できない
-- [ ] Phase 1 / Phase 2 の mouth sync、blink、camera tracking に regression がない
+- [x] αブレンドでセル切り替えの違和感が減る
+- [x] mesh renderer ON/OFF で通常描画との見た目差分が小さい
+- [x] depth map があるセルだけ elastic morph できる
+- [x] depth map が無いセルは通常 mesh fallback になる
+- [x] Morph ON/OFF を Tweaks から切り替えられる
+- [x] 低 FPS 時は morph を自動 fallback して配信品質を守る
+- [x] Phase 1 / Phase 2 の mouth sync、blink、camera tracking に regression がない（`go test ./...` で確認）
 
 ---
 

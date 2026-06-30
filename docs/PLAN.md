@@ -1,7 +1,7 @@
 # GoTuber — 詳細プラン
 
-> **ステータス**: v0.4.8（Q1, Q3, Q4, Q12 確定、Q6 post_release 化、Q8 MediaPipe 即採用で確定、Phase 2 完了、Phase 3 Creator Tools 転換、Phase 3.6 depth map 生成完了、Phase 4 Morph Renderer 計画追加）
-> **作成日**: 2026-06-15 / 改訂 2026-06-15（v0.4: レビュー反映、v0.4.3: Q 確定反映）/ 2026-06-16（v0.4.4: Q6 post_release 化）/ 2026-06-17（v0.4.5: Q8 MediaPipe 即採用で確定）/ 2026-06-24（v0.4.7: Phase 3 Creator Tools 転換）/ 2026-06-30（v0.4.8: Phase 3.6 depth map + Phase 4 Morph Renderer 追加）
+> **ステータス**: v0.4.9（Q1, Q3, Q4, Q12 確定、Q6 post_release 化、Q8 MediaPipe 即採用で確定、Phase 2 完了、Phase 3 Creator Tools 転換、Phase 3.6 depth map 生成完了、Phase 4 Morph Renderer 実装完了）
+> **作成日**: 2026-06-15 / 改訂 2026-06-15（v0.4: レビュー反映、v0.4.3: Q 確定反映）/ 2026-06-16（v0.4.4: Q6 post_release 化）/ 2026-06-17（v0.4.5: Q8 MediaPipe 即採用で確定）/ 2026-06-24（v0.4.7: Phase 3 Creator Tools 転換）/ 2026-06-30（v0.4.8: Phase 3.6 depth map + Phase 4 Morph Renderer 追加、v0.4.9: Phase 4 実装完了）
 > **ベース**: `tomari-guruguru`（React/Vite/JSX）→ **Golang 完全書き換え**（確定）
 > **ターゲット OS**: Windows / Linux / macOS
 > **ビルド環境**: Windows 10/11（PowerShell + MSVC）または WSL Ubuntu（gcc）。KASOU は runtime 専用
@@ -391,7 +391,7 @@ YAML 読み込み後、**フェイルファスト** で以下を検証：
 | 2.10.7 | yaw ミラー補正 | 0.1 日 | ✅ 実装完了: 左右向きの体感一致 |
 | 3 | Creator Tools | 1〜2 週 | **Phase 3.0 仕様固定中** (2026-06-24) |
 | 3.6 | Depth Map Generator | 1〜2 日 | ✅ 実装完了: DA3 GPU (RTX 2060) + alpha-aware 正規化 + 背景クリア + batch推論。A〜F 全150枚生成済み |
-| 4 | Morph Renderer | 1〜2 週 | 🔜 予定: αブレンド + mesh + depth-weighted elastic morph |
+| 4 | Morph Renderer | 完了 | ✅ αブレンド + mesh + depth-weighted elastic morph + Tweaks UI + fallback |
 
 各フェーズのゴール・実装項目・DoD・工数等の詳細は対応するファイル参照。
 
@@ -495,7 +495,7 @@ GOTUBER_LOG_LEVEL=debug go run ./cmd/gotuber
 | R12 | フォーカスフリッカー（クリックスルー有効化直後 200ms） | 中 | xdotool で KASOU 検証、60 フレーム遅延発火オプションで対応 |
 | R13 | Phase 2 tracker クラッシュ時の可用性 | 中 | CameraTracker の defer recover で panic 吸収、supervisor loop が exponential backoff で自動再起動 (1s → 30s 上限、3 回成功でリセット)、5 回連続失敗で Tweaks に "Camera Down — Manual Restart Required" 表示。実装: `internal/camera/supervisor.go` (Phase 2.5) |
 | R14 | **Phase 2 Windows native camera runtime 差異** | 中 | Phase 2.10 で build blocker (`blackjack/webcam`, `zmq.h`, `CameraTracker` 直依存) は除去済み。ただし Python sidecar 実行環境（venv, OpenCV camera access, MediaPipe model path, localhost TCP 接続）で OS 差異が残る。**対策**: `build.ps1 -Camera` / `dev.ps1 -Camera` / `tools/setup-mp.ps1` を基準運用に統一し、visual test で Lost Signal / Down / Restart を確認。詳細は [PHASE2.md Phase 2.10](./PHASE2.md#phase-210-windows-native-camera-対応-2026-06-23--未着手) |
-| R15 | Morph Renderer の mesh/depth 処理で FPS が落ちる | 中 | Phase 4 は `DrawImage()` fallback と Morph ON/OFF を必須にする。初期 mesh は 16×16 または 32×32 に制限し、depth map が無い場合は通常描画へ戻す |
+| R15 | Morph Renderer の mesh/depth 処理で FPS が落ちる | 中 | Phase 4.4 で morph mesh cache、depth map 読み込み skip、FPS 低下時 auto fallback、Morph ON/OFF を実装済み。depth map が無い場合は通常 mesh fallback。 |
 
 ---
 
@@ -626,3 +626,5 @@ Phase 1 を以下の順序で進める。各ステップ完了時にコミット
 *v0.4.7 改訂: Phase 3 を VMC Protocol 出力から Creator Tools に全面転換。GoTuber は外部 VTuber アプリへモーションを渡すのではなく、GoTuber 内で完結する低コスト PNGTuber 制作フレームワークとして進める。v0.4.6 Phase 2 配信中可用性方針から継続。*
 
 *v0.4.8 改訂: Phase 3.6 Depth Map Generator と Phase 4 Morph Renderer を追加。Phase 3 は depth map を作るだけに留め、Phase 4 で αブレンド・mesh・depth-weighted elastic deformation を runtime 描画層として扱う。*
+
+*v0.4.9 改訂: Phase 4 Morph Renderer 実装完了。Phase 4.0 αブレンド、4.1 mesh renderer、4.2 depth-weighted elastic morph、4.3 Tweaks UI、4.4 performance fallback まで完了。*
