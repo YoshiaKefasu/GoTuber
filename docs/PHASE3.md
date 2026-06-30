@@ -2,7 +2,7 @@
 
 > **ステータス**: Phase 3.0 仕様固定完了（2026-06-24）
 > **最終更新**: 2026-06-24
-> **親プラン**: [PLAN.md](./PLAN.md) v0.4.7
+> **親プラン**: [PLAN.md](./PLAN.md) v0.4.8
 
 ---
 
@@ -426,6 +426,153 @@ Phase 3 で提供するサンプルキャラクター画像（`assets/characters
 - `docs/01_画像生成用プロンプト.txt` と重複しないように整理
 - 初回ユーザー向け quickstart 追加
 
+### Phase 3.6: Depth Map Generator
+
+Phase 3.6 は **Morph Renderer 用 depth map を事前生成する Creator Tools 拡張**とする。
+
+ここでは depth map を **作るだけ**に留める。GoTuber runtime で depth map を読み込んでメッシュ変形する処理は Phase 4 に分離する。
+
+目的:
+
+- A〜F / r0c0〜r4c4 の各セル画像に対応する depth map を生成する
+- 生成結果を `A/depth/r2c2.png` のように、各 sheet ディレクトリ配下へ保存する
+- Phase 4 の Morph Renderer がそのまま読めるファイル配置を Phase 3 側で先に固定する
+- depth map が無いキャラクターでも、既存 GoTuber runtime は従来通り動作できるようにする
+
+非ゴール:
+
+- runtime Morph Renderer の実装
+- Ebitengine の `DrawTriangles` / mesh rendering
+- αブレンドによるセル切り替え
+- depth map を使った頂点変形
+- runtime 中の深度推定 ML 実行
+
+Phase 3.6 で生成する depth map は **オフライン生成物**であり、配信中の CPU/GPU 負荷を増やさない。
+
+#### 3.6.1 出力配置
+
+depth map は、対応する sheet ディレクトリの直下に `depth/` を作って保存する。
+
+```text
+assets/characters/{character-name}/
+├── A/
+│   ├── r0c0.webp
+│   ├── r0c1.webp
+│   ├── ...
+│   ├── r4c4.webp
+│   └── depth/
+│       ├── r0c0.png
+│       ├── r0c1.png
+│       ├── ...
+│       └── r4c4.png
+├── B/
+│   ├── r0c0.webp
+│   └── depth/
+│       └── r0c0.png ... r4c4.png
+...
+└── F/
+    ├── r0c0.webp
+    └── depth/
+        └── r0c0.png ... r4c4.png
+```
+
+例:
+
+```text
+assets/characters/yosia_sample/A/depth/r2c2.png
+```
+
+この配置にする理由:
+
+- `A/r2c2.webp` と `A/depth/r2c2.png` が 1 対 1 で対応して分かりやすい
+- character pack を ZIP 配布する時に、画像と depth map が同じ sheet 配下にまとまる
+- Phase 4 runtime が `image path -> depth path` を単純に変換できる
+
+#### 3.6.2 Depth Map 仕様
+
+| 項目 | 仕様 |
+|---|---|
+| フォーマット | PNG |
+| 解像度 | 1200×1200 px |
+| 色 | grayscale |
+| 白 | 手前。頂点変形の影響を強く受ける |
+| 黒 | 奥。頂点変形の影響を弱くする |
+| 透明領域 | 可能なら元画像と同じ alpha を維持。難しい場合は grayscale RGB + alpha 255 でも可 |
+
+depth map は character image と同じ `1200×1200 anchored` に揃える。
+
+PNG の色形式は、初期実装では **grayscale** または **grayscale + alpha** を許容する。
+`validate-depth` は「PNG として読み込めること」と「grayscale として扱えること」を確認する。
+alpha がある場合は、Phase 4 runtime が透明領域の変形を弱めるための補助情報として使える。
+
+理由:
+
+- Phase 4 の mesh vertex が `SrcX/SrcY` で画像と depth map の同じ UV を参照できる
+- 画像側だけ 1200×1200、depth 側だけ 900×900 だと、頂点変形時に座標変換が増える
+- 既存 `_default` アセットのサイズと同じなので、runtime fallback を単純化できる
+
+#### 3.6.3 CLI 予定
+
+全 sheet をまとめて生成する場合:
+
+```powershell
+python tools/gotuber_creator.py generate-depth `
+  --input assets/characters/yosia_sample `
+  --sheets A,B,C,D,E,F
+```
+
+全 sheet を対象にする場合は、`--sheets` を省略してもよい。
+
+```powershell
+python tools/gotuber_creator.py generate-depth `
+  --input assets/characters/yosia_sample
+```
+
+1 sheet だけ生成する場合:
+
+```powershell
+python tools/gotuber_creator.py generate-depth `
+  --input assets/characters/yosia_sample `
+  --sheets A
+```
+
+初期実装では、depth 推定モデルの選定を固定しすぎない。
+まずは以下のどちらかを許容する。
+
+- 自動推定: depth model / 外部 CLI / Python package を使って生成
+- 手動配置: ユーザーが作った `depth/r{row}c{col}.png` を validate だけする
+
+ただし、Phase 3.6 実装に入る前に **Phase 3.6.0: depth backend decision** を置く。
+ここで以下を決めてから `generate-depth` を実装する。
+
+- 既定 backend（例: Depth Anything V2 系、または同等の offline depth estimator）
+- Windows でのセットアップ方法
+- CPU/GPU どちらを初期サポートにするか
+- `--backend auto/manual/<name>` の CLI 形
+- backend が無い環境では `validate-depth` のみ使える fallback
+
+#### 3.6.4 validate-depth
+
+`validate-depth` は depth map が Phase 4 で読める形になっているかだけを確認する。
+
+```powershell
+python tools/gotuber_creator.py validate-depth `
+  --input assets/characters/yosia_sample
+```
+
+検証項目:
+
+| # | 検証内容 | エラー例 |
+|---|---|---|
+| 1 | 対象 sheet に `depth/` が存在する | `A/depth/ がない` |
+| 2 | `r{0-4}c{0-4}.png` が 25 枚存在する | `A/depth/r2c3.png がない` |
+| 3 | 各 depth map が 1200×1200 px | `A/depth/r0c0.png が 900×900` |
+| 4 | PNG として読み込める | `A/depth/r0c0.png を decode できない` |
+| 5 | grayscale として扱える | `A/depth/r0c0.png が想定外の色形式` |
+
+depth map が存在しない場合、既存 GoTuber runtime はエラーにしない。
+Phase 4 runtime でも depth map が無いセルは通常描画へ fallback する。
+
 ---
 
 ## 8. 完了基準 (DoD)
@@ -460,5 +607,6 @@ Phase 3 で提供するサンプルキャラクター画像（`assets/characters
 - [PLAN.md](./PLAN.md)
 - [PHASE1.md](./PHASE1.md)
 - [PHASE2.md](./PHASE2.md)
+- [PHASE4.md](./PHASE4.md) — Phase 3.6 で生成した depth map を runtime Morph Renderer で使う
 - [post_release.md](./post_release.md)
 - [新キャラ差し替え手順.md](./新キャラ差し替え手順.md)

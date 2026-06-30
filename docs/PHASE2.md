@@ -2,7 +2,7 @@
 
 > **ステータス**: MediaPipe Face Landmarker 即採用で確定 (2026-06-17)、配信中可用性方針 (Section 1.1) 追加 (2026-06-22)
 > **最終更新**: 2026-06-23 (Phase 2.10 Windows native camera 未完了を明記)
-> **親プラン**: [PLAN.md](./PLAN.md) v0.4.7
+> **親プラン**: [PLAN.md](./PLAN.md) v0.4.8
 
 **採用方針**: 顔 (頭) トラッキング + まばたきだけなら、YuNet (5 landmarks) ではなく **MediaPipe Face Landmarker** (Tasks API、478 landmarks) を即採用。1 つのモデルで頭の方向 (yaw/pitch/roll) と EAR (瞬き) を取れる。YuNet だと瞬き検出が別モデル or 別処理になり、依存が増えて結局 MediaPipe 構成と大差ないため。
 
