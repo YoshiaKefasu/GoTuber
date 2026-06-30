@@ -390,7 +390,7 @@ YAML 読み込み後、**フェイルファスト** で以下を検証：
 | 2.10.6 | transformation matrix 優先 pose 推定 | 0.5 日 | ✅ 実装完了: solvePnP fallback 化 |
 | 2.10.7 | yaw ミラー補正 | 0.1 日 | ✅ 実装完了: 左右向きの体感一致 |
 | 3 | Creator Tools | 1〜2 週 | **Phase 3.0 仕様固定中** (2026-06-24) |
-| 3.6 | Depth Map Generator | 1〜2 日 | 🔜 予定: Phase 4 Morph Renderer 用 depth map を `A/depth/r2c2.png` 形式で生成 |
+| 3.6 | Depth Map Generator | 1〜2 日 | 🔜 予定: Depth Anything v3 で Phase 4 Morph Renderer 用 depth map を `A/depth/r2c2.png` 形式で生成 |
 | 4 | Morph Renderer | 1〜2 週 | 🔜 予定: αブレンド + mesh + depth-weighted elastic morph |
 
 各フェーズのゴール・実装項目・DoD・工数等の詳細は対応するファイル参照。

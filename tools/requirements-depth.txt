@@ -1,0 +1,8 @@
+# Phase 3.6 用 Depth Anything v3 depth map 生成依存
+# pip install -r tools/requirements-depth.txt
+# セットアップ手順: docs/PHASE3.md Section 3.6 参照
+# 注意: GoTuber 本体 runtime には不要。Creator Tools の depth map 生成時だけ使う。
+
+depth-anything-3
+numpy>=1.24.0
+Pillow>=10.0.0,<12

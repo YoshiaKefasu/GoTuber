@@ -536,20 +536,50 @@ python tools/gotuber_creator.py generate-depth `
   --sheets A
 ```
 
-初期実装では、depth 推定モデルの選定を固定しすぎない。
-まずは以下のどちらかを許容する。
+初期実装の既定 backend は **Depth Anything v3** とする。
 
-- 自動推定: depth model / 外部 CLI / Python package を使って生成
-- 手動配置: ユーザーが作った `depth/r{row}c{col}.png` を validate だけする
+採用理由:
 
-ただし、Phase 3.6 実装に入る前に **Phase 3.6.0: depth backend decision** を置く。
-ここで以下を決めてから `generate-depth` を実装する。
+- heuristic edge map は depth ではなく輪郭抽出に寄り、Phase 4 の Morph Renderer 用には不適切だった
+- Depth Anything v3 は単眼画像から offline depth を生成でき、Phase 4 が欲しい「白=手前 / 黒=奥」に素直に近い
+- Windows-first 運用でも、Python CLI / モデル weights / GPU or CPU 実行という形で Creator Tools に載せやすい
 
-- 既定 backend（例: Depth Anything V2 系、または同等の offline depth estimator）
-- Windows でのセットアップ方法
-- CPU/GPU どちらを初期サポートにするか
-- `--backend auto/manual/<name>` の CLI 形
-- backend が無い環境では `validate-depth` のみ使える fallback
+Phase 3.6.0: depth backend decision は **Depth Anything v3 採用で確定** とし、以降の `generate-depth` 実装はこれを既定とする。
+
+実装方針:
+
+- 既定 backend: `depth-anything-v3`
+- 依存: Python package / weights / offline inference 環境
+- `generate-depth` はまず Depth Anything v3 backend を優先する
+- backend が使えない環境では `--backend manual` に fallback できるようにする
+- `validate-depth` は backend 非依存で単独利用可能にする
+
+セットアップ:
+
+- Windows: `tools/setup-depth.ps1`
+- Linux / WSL: `tools/setup-depth.sh`
+- venv 名: `.venv-depth`
+- 依存一覧: `tools/requirements-depth.txt`
+
+```powershell
+.\tools\setup-depth.ps1
+```
+
+```bash
+./tools/setup-depth.sh
+```
+
+セットアップ完了後は、`.venv-depth` を activate した状態で `generate-depth` を実行する。
+
+CLI 形の目安:
+
+```powershell
+python tools/gotuber_creator.py generate-depth `
+  --input assets/characters/yosia_sample `
+  --backend depth-anything-v3
+```
+
+または、既定 backend を使う場合は `--backend` 省略を許可する。
 
 #### 3.6.4 validate-depth
 

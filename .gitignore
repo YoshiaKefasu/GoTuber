@@ -51,6 +51,10 @@ tools/models/
 # Phase 2: MediaPipe Python サイドカー環境
 # (.venv-mp/ はディレクトリ名のみで Windows / Unix 両対応)
 .venv-mp/
+
+# Phase 3.6: Depth Anything v3 Python 環境
+.venv-depth/
+
 __pycache__/
 *.pyc
 *.pyo
