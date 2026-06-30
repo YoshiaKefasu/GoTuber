@@ -214,7 +214,7 @@ func TestNoiseGate_OpensOnVoice(t *testing.T) {
 	}
 	floorBefore := m.noiseFloor
 
-	// 2) 明確な音声 (raw = 0.05 = floor + ~0.046 >> openMargin=0.002)
+	// 2) 明確な音声 (raw = 0.05 = floor + ~0.046 >> openMargin=0.008)
 	for i := 0; i < 5; i++ {
 		got := m.applyNoiseGate(0.05)
 		if i == 0 && !m.gateOpen {
@@ -270,49 +270,49 @@ func TestNoiseGate_ClosesOnSilence(t *testing.T) {
 func TestNoiseGate_Hysteresis(t *testing.T) {
 	m := newMoverForTest()
 
-	// floor を 0.004 まで安定化
+	// raw=0.02 を 200 フレーム与えると floor は約 0.0196 まで上がる。
+	// low-floor guard (threshold=0.01) を超える値にして、通常の margin 判定が
+	// 機能する状態を作る。
 	for i := 0; i < 200; i++ {
-		m.applyNoiseGate(0.0040)
+		m.applyNoiseGate(0.02)
 	}
 
-	// 0.004 (= floor) を 50 回 → gate は open しない (raw < floor + openMargin=0.002)
+	// その後 raw=0.014 を 50 回与えて floor を約 0.014 へ下げる。
+	// raw は floor 付近なので gate は open しない (raw < floor + openMargin=0.008)。
 	for i := 0; i < 50; i++ {
-		m.applyNoiseGate(0.0040)
+		m.applyNoiseGate(0.014)
 		if m.gateOpen {
 			t.Errorf("iter %d: gate should stay closed (raw=floor), got open", i)
 		}
 	}
 
-	// 0.006 (= floor + 0.002 = open threshold ぴったり) → gate 開く
-	//   判定: raw > floor + gateOpenMargin (0.002) → 0.006 > 0.006 は false で開かない…
-	//   実装は strict greater-than ではなく >= でもないので、margin の境界値は要確認。
-	//   安全策として 0.0061 (= floor + 0.0021) で開くことを確認する。
-	m.applyNoiseGate(0.0061)
+	// 0.0221 (= floor + 0.0081 = open threshold を超える) → gate 開く
+	m.applyNoiseGate(0.0221)
 	if !m.gateOpen {
 		t.Errorf("gate should open above open threshold, got closed")
 	}
 
-	// 0.005 (= floor + 0.001 = close threshold ぴったり) を 5 回 → gate はまだ open
-	//   close 判定: raw < floor + gateCloseMargin (0.001) → 0.005 < 0.005 は false で閉じない
+	// 0.0181 (= floor + 0.0041 = close threshold を超える) を 5 回 → gate はまだ open
+	//   close 判定: raw < floor + gateCloseMargin (0.004) → 0.0181 < 0.018 は false で閉じない
 	for i := 0; i < 5; i++ {
-		m.applyNoiseGate(0.0050)
+		m.applyNoiseGate(0.0181)
 		if !m.gateOpen {
 			t.Errorf("iter %d: gate should stay open at close threshold, got closed", i)
 		}
 	}
 
-	// 0.0049 (= floor + 0.0009 < close margin) → gate 閉じる
-	m.applyNoiseGate(0.0049)
+	// 0.0179 (= floor + 0.0039 < close margin) → gate 閉じる
+	m.applyNoiseGate(0.0179)
 	if m.gateOpen {
 		t.Errorf("gate should close below close margin, got open")
 	}
 }
 
 // TestNoiseGate_GainApplies は gate 開放中の戻り値がゲイン適用済みであることを確認。
-// 実機のシナリオ: raw=0.01, floor=0.004, sensitivity=15 のとき
+// 実機のシナリオ: raw=0.02, floor=0.004, sensitivity=15 のとき
 //
-//	voice = 0.01 - 0.004 - 0.001 = 0.005
-//	scaled = 0.005 * 15 = 0.075
+//	voice = 0.02 - 0.004 - 0.004 = 0.012
+//	scaled = 0.012 * 15 = 0.18
 //
 // → MouthHalf 閾値 (0.07) を超える値になる。
 func TestNoiseGate_GainApplies(t *testing.T) {
@@ -331,15 +331,15 @@ func TestNoiseGate_GainApplies(t *testing.T) {
 		t.Fatal("gate should open")
 	}
 
-	// raw=0.01 をフィード
-	got := m.applyNoiseGate(0.01)
+	// raw=0.02 をフィード
+	got := m.applyNoiseGate(0.02)
 
-	// 期待値: (0.01 - floor - 0.001) * 15
-	expected := (0.01 - floor - gateCloseMargin) * 15
+	// 期待値: (0.02 - floor - 0.004) * 15
+	expected := (0.02 - floor - gateCloseMargin) * 15
 	if got < expected*0.9 || got > expected*1.1 {
 		t.Errorf("expected gain ~%v, got %v (floor=%v)", expected, got, floor)
 	}
-	// ゲイン適用後 ≈ 0.075 → MouthHalf 閾値 0.07 を超えるはず
+	// ゲイン適用後 ≈ 0.18 → MouthHalf 閾値 0.07 を超えるはず
 	if got <= 0.07 {
 		t.Errorf("gated RMS should exceed MouthHalf threshold (0.07) with sensitivity 15, got %v", got)
 	}
@@ -417,6 +417,76 @@ func TestNoiseGate_SensitivityLazyInit(t *testing.T) {
 	if m.sensitivity != defaultMicSensitivity {
 		t.Errorf("expected sensitivity=%v after first call, got %v",
 			defaultMicSensitivity, m.sensitivity)
+	}
+}
+
+// =====================================================================
+// Phase 1.14.14 regression tests: 部屋ノイズ環境でのゲート安定性
+//
+// 実機で観測された問題: room noise RMS 0.01-0.02 でゲートが即開き、
+// floor 学習が止まって口がパクパクする。
+// 修正: openMargin 0.002→0.008, closeMargin 0.001→0.004,
+// low-floor guard (floor < 0.01 且つ raw < 0.03 なら gate closed)。
+// =====================================================================
+
+// TestNoiseGate_RoomNoiseDoesNotOpenGate は部屋ノイズ raw=0.02 が
+// 持続しても gate が開かず、floor が上昇学習することを確認する回帰テスト。
+//
+// シナリオ: 200 フレーム raw=0.02 をフィード
+// 期待: gate は closed のまま、noiseFloor は 0.01 以上に収束する。
+func TestNoiseGate_RoomNoiseDoesNotOpenGate(t *testing.T) {
+	m := newMoverForTest()
+
+	for i := 0; i < 200; i++ {
+		got := m.applyNoiseGate(0.02)
+		if m.gateOpen {
+			t.Fatalf("iter %d: gate should stay closed on room noise raw=0.02, got open", i)
+		}
+		if got != 0 {
+			t.Errorf("iter %d: gated RMS should be 0 when gate closed, got %v", i, got)
+		}
+	}
+
+	// floor は 0.02 に向けて収束しているはず
+	if m.noiseFloor < 0.01 {
+		t.Errorf("noise floor should learn toward room noise level, got %v (expected > 0.01)", m.noiseFloor)
+	}
+	if m.noiseFloor > 0.025 {
+		t.Errorf("noise floor should not overshoot room noise, got %v (expected < 0.025)", m.noiseFloor)
+	}
+}
+
+// TestNoiseGate_VoiceOpensAfterFloorLearned は floor が学習された後、
+// 明確な音声 (raw=0.06) で gate が開き、正の gated RMS が得られることを確認。
+//
+// シナリオ: 200 フレーム raw=0.02 で floor 学習 → raw=0.06 で voice 検出
+// 期待: gate が開き、gated RMS > 0、floor は凍結される。
+func TestNoiseGate_VoiceOpensAfterFloorLearned(t *testing.T) {
+	m := newMoverForTest()
+
+	// floor 学習 (room noise raw=0.02)
+	for i := 0; i < 200; i++ {
+		m.applyNoiseGate(0.02)
+	}
+	floorBefore := m.noiseFloor
+	if m.gateOpen {
+		t.Fatal("gate should be closed after room noise")
+	}
+
+	// 明確な音声 (raw=0.06)
+	got := m.applyNoiseGate(0.06)
+	if !m.gateOpen {
+		t.Fatal("gate should open on clear voice raw=0.06")
+	}
+
+	// gated RMS は正の値
+	if got <= 0 {
+		t.Errorf("gated RMS should be positive for voice, got %v", got)
+	}
+
+	// floor は gate 開放中凍結されている
+	if m.noiseFloor != floorBefore {
+		t.Errorf("noise floor should freeze while gate open, got %v (was %v)", m.noiseFloor, floorBefore)
 	}
 }
 

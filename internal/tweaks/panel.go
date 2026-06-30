@@ -796,7 +796,7 @@ func (p *Panel) Update() {
 // 読み方:
 //   - RMS=0 → マイク入力が来ていない (device 不正 or ミュート)
 //   - RMS>0, Floor も同程度, Gate closed → 環境ノイズのみ (正常)
-//   - RMS が Floor + 0.002 を超えれば Gate open になる
+//   - RMS が Floor + 0.008 を超えれば Gate open になりやすい
 //   - Gate open なのに Mouth が動かない → gain / envelope 閾値側を疑う
 func audioDebugLabel1(state *State) string {
 	return fmt.Sprintf("Audio RMS: %.4f | Floor: %.4f | Gate: %s",

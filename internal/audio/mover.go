@@ -5,17 +5,23 @@ package audio
 // ゲートを設ける。固定閾値を雑に下げると常時ノイズで口がパクパクするため、
 // noise floor を毎フレーム追従させ、gate の open/close にヒステリシスを持たせる。
 //
-// 数値は初期案 (実機 tweak 用)。小さく始め、visual test で口パク頻度を観察して調整。
+// 数値は実機 tweak 経由で確定 (2026-06-30)。部屋ノイズ RMS 0.01-0.02 環境で
+// gate が過敏に開く問題を修正した。
 //   - defaultMicSensitivity: ゲイン倍率。raw 0.005 程度でも 0.07 (MouthHalf) を超えるよう
 //     10x を初期値に。sensitivity 0 のときはこれで自動初期化。
-//     Phase 1.14.15 で 15.0 → 10.0 に下げる (15x は無音ノイズで Gated=0.081 → half になるため)。
-//   - minMicSensitivity / maxMicSensitivity: Phase 1.14.15 slider のクランプ範囲。
+//   - minMicSensitivity / maxMicSensitivity: Tweaks slider のクランプ範囲。
 //   - noiseFloorRiseRate: 環境ノイズ上昇時の追従速度 (1 更新あたり)。ゆっくり。
 //   - noiseFloorFallRate: 環境ノイズ下降時の追従速度 (1 更新あたり)。上昇より速め。
 //   - noiseFloorWarmupFrames: 起動直後の小さい常時ノイズで gate が即開くのを防ぐ
 //     学習フレーム数。60fps 前提で約 1 秒。
 //   - gateOpenMargin / gateCloseMargin: gate 開閉ヒステリシス (RMS 空間)。
 //     open > close にすることで、gate 境界でフリッカしない。
+//     0.008 / 0.004 は部屋ノイズ 0.01-0.02 で安定運用するための値。
+//   - lowFloorGuardThreshold: noiseFloor がこの値未満のとき、floor はまだ
+//     環境ノイズを学習中とみなす。この間は voiceAbsoluteThreshold 以上の
+//     raw でなければ gate を開かない。
+//   - voiceAbsoluteThreshold: floor 未学習時の absolute 閾値。部屋ノイズ
+//     (0.01-0.02) がこの値未満であるため、この閾値で分離できる。
 const (
 	minMicSensitivity      = 1.0
 	defaultMicSensitivity  = 10.0
@@ -23,8 +29,18 @@ const (
 	noiseFloorRiseRate     = 0.02
 	noiseFloorFallRate     = 0.08
 	noiseFloorWarmupFrames = 60
-	gateOpenMargin         = 0.002
-	gateCloseMargin        = 0.001
+	gateOpenMargin         = 0.008
+	gateCloseMargin        = 0.004
+
+	// low-floor guard: noiseFloor がこの値未満のとき floor 未学習とみなす。
+	// 部屋ノイズ 0.01-0.02 環境で、warmup 後も floor が 0 に近い場合に
+	// gate が即開くのを防ぐ。
+	lowFloorGuardThreshold = 0.01
+
+	// voiceAbsoluteThreshold: floor 未学習時の絶対開門閾値。
+	// raw がこの値以上でなければ gate を開かない (margin 判定の前に適用)。
+	// 部屋ノイズ (0.01-0.02) はこの閾値未満のため、ゲートが開かない。
+	voiceAbsoluteThreshold = 0.03
 )
 
 // Mover は Capture + EnvelopeFollower + MouthTracker を束ねる高レベル API。
@@ -138,14 +154,19 @@ func (m *Mover) UpdateWithMetrics() Metrics {
 //     超えて gate が即開いてしまう。そこで最初の 60 frame は gate を強制 closed にして
 //     floor を先に学習させる。
 //
-//  2. gate ヒステリシス: open/close の閾値にマージン差 (open 0.002 / close 0.001)
+//  2. gate ヒステリシス: open/close の閾値にマージン差 (open 0.008 / close 0.004)
 //     を持たせ、境界でフリッカしない。raw > floor+open で開、raw < floor+close
-//     で閉じる。close 側はマージンが小さい分だけ gate を開きっぱなしにし、
-//     短発話 (破裂音等) で gate が頻繁に開閉するのを防ぐ。
+//     で閉じる。
+//
+//     low-floor guard: noiseFloor が lowFloorGuardThreshold (0.01) 未満のとき、
+//     floor はまだ環境ノイズを学習中とみなす。この間は raw が
+//     voiceAbsoluteThreshold (0.03) 以上でなければ gate を開かない。
+//     部屋ノイズ 0.01-0.02 はこの閾値未満のため、floor 学習中にゲートが
+//     開くことを防ぐ。floor が 0.01 に到達すれば、通常の margin 判定に移行。
 //
 //  3. gain: gate 開放中は (raw - floor - closeMargin) * sensitivity を返す。
-//     sensitivity 0 のときは defaultMicSensitivity (10) を採用する。Phase 1.14.15
-//     以降は Tweaks の Mic Sensitivity slider から 1.0x..20.0x で調整できる。
+//     sensitivity 0 のときは defaultMicSensitivity (10) を採用する。
+//     Tweaks の Mic Sensitivity slider から 1.0x..20.0x で調整できる。
 //
 // 戻り値:
 //   - gate closed: 0
@@ -170,12 +191,19 @@ func (m *Mover) applyNoiseGate(raw float64) float64 {
 	// 2) gate ヒステリシス判定。
 	// gate closed 中に raw が open threshold を超えた場合は、まず voice とみなし、
 	// その loud sample を noise floor に混ぜない。
+	//
+	// low-floor guard: noiseFloor が lowFloorGuardThreshold 未満のとき、
+	// floor はまだ環境ノイズを学習中とみなす。この間は raw が
+	// voiceAbsoluteThreshold 以上でなければ gate を開かない。
+	// 部屋ノイズ 0.01-0.02 でもこの閾値未満のため、ゲートが開かない。
 	if m.gateOpen {
 		if raw < m.noiseFloor+gateCloseMargin {
 			m.gateOpen = false
 		}
 	} else if raw > m.noiseFloor+gateOpenMargin {
-		m.gateOpen = true
+		if m.noiseFloor >= lowFloorGuardThreshold || raw >= voiceAbsoluteThreshold {
+			m.gateOpen = true
+		}
 	}
 
 	// 3) gate closed → 無音扱い。ここでだけ floor を追従させる。
