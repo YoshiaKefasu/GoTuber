@@ -62,6 +62,75 @@ type DeviceListMessage struct {
 	Devices []audio.Device
 }
 
+// ─── Phase 4.0: Cell Transition α-blend ───────────────────────────────────
+
+// cellTransition はセル切り替え時の α ブレンド遷移状態を保持する。
+//
+// 表示セル (sheetIdx, row, col) が変わったとき、旧セルから新セルへ
+// 一定時間 (default 100ms) かけてフェードクロスする。
+// 純粋関数 updateTransition で状態を進めるため、ユニットテストで検証可能。
+type cellTransition struct {
+	fromSheet, fromRow, fromCol int   // フェードアウト中の旧セル
+	progress                    float64 // 0.0 = 旧セル表示, 1.0 = 新セル表示
+	active                      bool    // true = 遷移中
+}
+
+// updateTransition はセル遷移状態を 1 フレーム分進める純粋関数。
+//
+// 引数:
+//   - t:          現在の遷移状態
+//   - prev*:      前フレームの表示セル (変化検出用)
+//   - cur*:       今フレームの表示セル
+//   - deltaSec:   前フレームからの経過秒数
+//   - durationSec: 遷移総期間 (秒)
+//
+// 返り値: 更新された遷移状態。
+//
+// 動作:
+//   - 非遷移中にセルが変わった → 遷移開始 (from = prev)
+//   - 遷移中にセルが変わった → 遷移再開 (from = prev, progress=0)
+//     (prev は前フレームで更新済み = 直近の遷移先セル)
+//   - 期間到達 → 遷移終了 (active=false)
+func updateTransition(
+	t cellTransition,
+	prevSheet, prevRow, prevCol int,
+	curSheet, curRow, curCol int,
+	deltaSec, durationSec float64,
+) cellTransition {
+	cellChanged := curSheet != prevSheet || curRow != prevRow || curCol != prevCol
+
+	if !t.active {
+		if cellChanged {
+			return cellTransition{
+				fromSheet: prevSheet, fromRow: prevRow, fromCol: prevCol,
+				progress: 0, active: true,
+			}
+		}
+		return t
+	}
+
+	// 遷移中: 進行度を進める
+	t.progress += deltaSec / durationSec
+
+	if cellChanged {
+		// 遷移中にセルが変わった → 現在の遷移先を起点に再開
+		return cellTransition{
+			fromSheet: prevSheet, fromRow: prevRow, fromCol: prevCol,
+			progress: 0, active: true,
+		}
+	}
+
+	if t.progress >= 1.0 {
+		t.progress = 1.0
+		t.active = false
+		return t
+	}
+
+	return t
+}
+
+// ─── Game ──────────────────────────────────────────────────────────────────
+
 // Game は Ebitengine のゲームロジック実装。
 type Game struct {
 	atlas  *character.Atlas
@@ -114,6 +183,32 @@ type Game struct {
 	// ポインタをスナップショットしてから使う (ロック保持中のメソッド呼び出しを回避)。
 	supervisorMu sync.RWMutex
 	supervisor   SupervisorCellProvider
+
+	// ─── Phase 4.0: Cell Transition α-blend ───────────────────────────────
+
+	// transEnabled はセル切り替え時の α ブレンド遷移を有効にするか。
+	// デフォルト true。Tweaks UI からの切替は Phase 4.3 で実装予定。
+	// ここを false にすると従来通りの即時切り替えに戻る。
+	transEnabled bool
+
+	// transDuration は遷移期間 (秒)。PHASE4.md 仕様値 100ms = 0.1s。
+	// 将来 Tweaks UI で 80〜120ms 範囲で調整可能にする予定 (Phase 4.3)。
+	transDuration float64
+
+	// trans は現在の遷移状態。updateTransition() で毎フレーム更新。
+	trans cellTransition
+
+	// prevSheet/Row/Col は前フレームの表示セル (変化検出用)。
+	// Update() 内で毎フレーム currentCell()/sheetForState() の結果を保存する。
+	// firstCellSet=false の初回だけは遷移を開始せず、現在セルをそのまま初期値として採用する。
+	prevSheet int
+	prevRow   int
+	prevCol   int
+	firstCellSet bool
+
+	// lastDrawTime は前フレームの時刻。updateTransition への deltaSec 計算に使う。
+	lastDrawTime    time.Time
+	firstDrawPassed bool // 初回 Update で lastDrawTime を初期化済みか
 }
 
 // New は新しい Game を作成する。
@@ -131,17 +226,24 @@ func New(
 	devicesCh chan DeviceListMessage,
 ) *Game {
 	return &Game{
-		atlas:       atlas,
-		mouse:       follower,
-		blink:       blinkSch,
-		audio:       audioMover,
-		panel:       panel,
-		tweaks:      tweaksState,
-		firstUpdate: true,
-		width:       initialWindowWidth,
-		height:      initialWindowHeight,
-		uiHidden:    false, // explicit: 初期は全 UI 表示状態 (F1 で開く)
-		devicesCh:   devicesCh,
+		atlas:          atlas,
+		mouse:          follower,
+		blink:          blinkSch,
+		audio:          audioMover,
+		panel:          panel,
+		tweaks:         tweaksState,
+		firstUpdate:    true,
+		width:          initialWindowWidth,
+		height:         initialWindowHeight,
+		uiHidden:       false, // explicit: 初期は全 UI 表示状態 (F1 で開く)
+		devicesCh:      devicesCh,
+		transEnabled:   true,                           // Phase 4.0: α-blend 有効 (default)
+		transDuration:  0.1,                            // 100ms (PHASE4.md 仕様値)
+		prevSheet:      -1,
+		prevRow:        -1,
+		prevCol:        -1,
+		firstCellSet:   false,
+		firstDrawPassed: false,
 	}
 }
 
@@ -274,6 +376,38 @@ func (g *Game) Update() error {
 		g.panel.Update()
 	}
 
+	// Phase 4.0: セル遷移 α-blend — セル変化検出 + 進行度更新
+	// eyesClosed / mouthState が確定した後に計算する。
+	if g.transEnabled {
+		now := time.Now()
+		var deltaSec float64
+		if g.firstDrawPassed {
+			deltaSec = now.Sub(g.lastDrawTime).Seconds()
+		}
+		g.lastDrawTime = now
+		g.firstDrawPassed = true
+
+		curSheet := g.sheetForState()
+		curRow, curCol := g.currentCell()
+
+		if !g.firstCellSet {
+			// 起動直後の 1 フレーム目は、旧セルが存在しない。
+			// ここで遷移を開始すると from=(-1,-1,-1) になり、
+			// Draw() 側で旧セル nil / 新セル alpha=0 となって 100ms フェードインしてしまう。
+			// 初回だけは現在セルをそのまま採用し、遷移を開始しない。
+			g.firstCellSet = true
+		} else {
+			g.trans = updateTransition(g.trans,
+				g.prevSheet, g.prevRow, g.prevCol,
+				curSheet, curRow, curCol,
+				deltaSec, g.transDuration)
+		}
+
+		g.prevSheet = curSheet
+		g.prevRow = curRow
+		g.prevCol = curCol
+	}
+
 	// SIGINT/SIGTERM 終了検出 (Unix only、Phase 1.14 で Esc 検出削除)
 	// Windows では Install() が no-op のため Triggered() は常に false。
 	// 終了はウィンドウ X ボタン (GLFW close callback) または Tweaks Quit ボタン。
@@ -301,21 +435,64 @@ func (g *Game) Draw(screen *ebiten.Image) {
 
 	row, col := g.currentCell()
 	sheetIdx := g.sheetForState()
-	img, ok := g.atlas.Get(sheetIdx, row, col)
-	if !ok || img == nil {
-		return
+
+	// Phase 4.0: α ブレンド遷移中は旧セルと新セルを重ねて描画。
+	// 遷移中でない場合は従来通り 1 枚描画。
+	if g.transEnabled && g.trans.active {
+		// 遷移元 (フェードアウト)
+		fromImg, fromOk := g.atlas.Get(g.trans.fromSheet, g.trans.fromRow, g.trans.fromCol)
+		// 遷移先 (フェードイン)
+		toImg, toOk := g.atlas.Get(sheetIdx, row, col)
+
+		// スケール基準は遷移先画像。nil の場合は遷移元で代替。
+		refImg := toImg
+		if refImg == nil {
+			refImg = fromImg
+		}
+		if refImg == nil {
+			return // 両方 nil なら描画不可
+		}
+
+		scale, ox, oy := g.calcDrawPosition(refImg)
+
+		if fromOk && fromImg != nil {
+			g.drawImageWithAlpha(screen, fromImg, 1.0-g.trans.progress, scale, ox, oy)
+		}
+		if toOk && toImg != nil {
+			g.drawImageWithAlpha(screen, toImg, g.trans.progress, scale, ox, oy)
+		}
+	} else {
+		// 従来通り: 単一画像を 100% alpha で描画
+		img, ok := g.atlas.Get(sheetIdx, row, col)
+		if !ok || img == nil {
+			return
+		}
+
+		scale, ox, oy := g.calcDrawPosition(img)
+		g.drawImageWithAlpha(screen, img, 1.0, scale, ox, oy)
 	}
 
+	if !g.uiHidden && g.tweaks.PanelVisible {
+		g.panel.Draw(screen)
+	}
+}
+
+// calcDrawPosition は画像のアスペクト比維持スケールとオフセットを計算する。
+func (g *Game) calcDrawPosition(img *ebiten.Image) (scale, ox, oy float64) {
 	iw, ih := img.Bounds().Dx(), img.Bounds().Dy()
-	// アスペクト比を維持してウィンドウ内に収まるようスケール。
-	// スプライト 1200x1200 をウィンドウサイズに合わせる。
 	scaleX := float64(g.width) / float64(iw)
 	scaleY := float64(g.height) / float64(ih)
-	scale := math.Min(scaleX, scaleY)
+	scale = math.Min(scaleX, scaleY)
 	scaledW := float64(iw) * scale
 	scaledH := float64(ih) * scale
-	ox := (float64(g.width) - scaledW) / 2
-	oy := (float64(g.height) - scaledH) / 2
+	ox = (float64(g.width) - scaledW) / 2
+	oy = (float64(g.height) - scaledH) / 2
+	return scale, ox, oy
+}
+
+// drawImageWithAlpha は画像を指定 alpha で screen に描画する。
+// alpha=1.0 の場合は普通の DrawImage 相当 (ColorScale スキップ)。
+func (g *Game) drawImageWithAlpha(screen, img *ebiten.Image, alpha, scale, ox, oy float64) {
 	op := &ebiten.DrawImageOptions{}
 	// FilterLinear: スケール時のジャギーを防ぐ (Ebitengine デフォルトの FilterNearest だと
 	// 1200x1200 スプライトを 720x720 (1280x720 ウィンドウ中央に letterbox) に縮小した時に
@@ -325,11 +502,14 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	op.Filter = ebiten.FilterLinear
 	op.GeoM.Scale(scale, scale)
 	op.GeoM.Translate(ox, oy)
-	screen.DrawImage(img, op)
-
-	if !g.uiHidden && g.tweaks.PanelVisible {
-		g.panel.Draw(screen)
+	if alpha < 1.0 {
+		// Phase 4.0: ColorScale.ScaleAlpha で画像全体のアルファを制御。
+		// 旧セルは (1-progress)、新セルは progress で 2 枚重ねてクロスフェード。
+		// 注: ScreenTransparent 背景上で 2 回 DrawImage するため中間地点で
+		// 少し暗くなるが、100ms の短い遷移では体感上問題ない (Phase 4.4 で最適化可能)。
+		op.ColorScale.ScaleAlpha(float32(alpha))
 	}
+	screen.DrawImage(img, op)
 }
 
 // currentCell は現在の camera mode に応じた atlas cell を返す。
