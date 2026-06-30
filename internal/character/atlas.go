@@ -124,6 +124,38 @@ func (a *Atlas) SheetFor(eyesClosed bool, mouth int) (sheetName string, sheetIdx
 	return a.cfg.SheetFor(eyesClosed, mouth)
 }
 
+// SheetName は sheet index に対応する sheet 名を返す。
+// 範囲外や cfg=nil の場合は空文字列を返す。
+func (a *Atlas) SheetName(sheetIdx int) string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.cfg == nil {
+		return ""
+	}
+	names := a.cfg.SheetNames()
+	if sheetIdx < 0 || sheetIdx >= len(names) {
+		return ""
+	}
+	return names[sheetIdx]
+}
+
+// DepthMapPath は指定セルの depth map パスを返す。
+// パス形式: `{BasePath}/{sheet}/depth/r{row}c{col}.png`
+// depth map が無い場合は空文字列を返す（エラーにしない — fallback は呼び出し側の責任）。
+//
+// Phase 4.2: depth-weighted elastic morph で使用。
+func (a *Atlas) DepthMapPath(sheet string, row, col int) string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.cfg == nil {
+		return ""
+	}
+	if row < 0 || row >= a.cfg.Rows || col < 0 || col >= a.cfg.Cols {
+		return ""
+	}
+	return fmt.Sprintf("%s/%s/depth/r%dc%d.png", a.cfg.BasePath, sheet, row, col)
+}
+
 // loadImageFile はファイルを開いて image.Decode → ebiten.Image 変換する。
 // 16 MB を超えるファイルはエラー（DoS 対策）。
 func loadImageFile(path string) (*ebiten.Image, error) {

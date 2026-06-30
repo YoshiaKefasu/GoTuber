@@ -3,6 +3,7 @@ package game
 
 import (
 	"fmt"
+	"image"
 	"image/color"
 	"sync"
 	"sync/atomic"
@@ -218,6 +219,16 @@ type Game struct {
 	// キー: "imgW×imgH@screenW×screenH"、値: フラットメッシュ
 	meshCacheMu sync.RWMutex
 	meshCache   map[string]*render.MeshGrid
+
+	// ─── Phase 4.2: Depth-weighted Elastic Morph ──────────────────────────
+
+	// morphElastic は elastic morph の滑らか追従状態。
+	// 毎フレーム mouse current から target を計算し、EMA で追従。
+	morphElastic render.MorphElastic
+
+	// morphDepthPath は現在のセルに対応する depth map パス。
+	// セルが変わったときだけ再計算。空なら flat mesh fallback。
+	morphDepthPath string
 }
 
 // New は新しい Game を作成する。
@@ -397,7 +408,7 @@ func (g *Game) Update() error {
 		g.lastDrawTime = now
 		g.firstDrawPassed = true
 
-		curSheet := g.sheetForState()
+		_, curSheet := g.sheetForState()
 		curRow, curCol := g.currentCell()
 
 		if !g.firstCellSet {
@@ -444,31 +455,61 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	}
 
 	row, col := g.currentCell()
-	sheetIdx := g.sheetForState()
+	sheetName, sheetIdx := g.sheetForState()
 
 	// Phase 4.0: α ブレンド遷移中は旧セルと新セルを重ねて描画。
 	// 遷移中でない場合は従来通り 1 枚描画。
 	// Phase 4.1: DrawImage から DrawTriangles (メッシュレンダリング) に切替。
+	// Phase 4.2: depth map があるセルは elastic morph を適用。
+
+	// Phase 4.2: elastic morph target 計算
+
+	// elastic morph: mouse current から target 変位を計算
+	// mouse.Current() は [-1, 1] の正規化座標。これをスクリーンピクセルに変換。
+	targetElX := 0.0
+	targetElY := 0.0
+	if g.mouse != nil {
+		mx, my := g.mouse.Current()
+		// maxDisplacement: 画面幅/高さの 0.4% を最大変位とする
+		// 1280x720 → max ~5px, 控えめだが視認可能な効果
+		targetElX = mx * float64(g.width) * 0.004
+		targetElY = my * float64(g.height) * 0.004
+	}
+	render.UpdateMorphElastic(&g.morphElastic, targetElX, targetElY)
+
 	if g.transEnabled && g.trans.active {
 		// 遷移元 (フェードアウト)
 		fromImg, fromOk := g.atlas.Get(g.trans.fromSheet, g.trans.fromRow, g.trans.fromCol)
 		// 遷移先 (フェードイン)
 		toImg, toOk := g.atlas.Get(sheetIdx, row, col)
 
+		// 旧セル / 新セルは別セルの可能性があるので、depth map も個別に読む。
+		// 共通化すると from 側が to 側の depth で変形し、輪郭崩れが出る。
+		fromDepthPath := ""
+		if fromSheetName := g.atlas.SheetName(g.trans.fromSheet); fromSheetName != "" {
+			fromDepthPath = g.atlas.DepthMapPath(fromSheetName, g.trans.fromRow, g.trans.fromCol)
+		}
+		fromDepthMap, fromHasDepth := render.LoadDepthMap(fromDepthPath)
+
+		toDepthPath := g.atlas.DepthMapPath(sheetName, row, col)
+		toDepthMap, toHasDepth := render.LoadDepthMap(toDepthPath)
+
 		if fromOk && fromImg != nil {
-			g.drawMeshWithAlpha(screen, fromImg, 1.0-g.trans.progress)
+			g.drawMeshWithAlpha(screen, fromImg, 1.0-g.trans.progress, fromDepthMap, fromHasDepth)
 		}
 		if toOk && toImg != nil {
-			g.drawMeshWithAlpha(screen, toImg, g.trans.progress)
+			g.drawMeshWithAlpha(screen, toImg, g.trans.progress, toDepthMap, toHasDepth)
 		}
 	} else {
+		depthPath := g.atlas.DepthMapPath(sheetName, row, col)
+		depthMap, hasDepth := render.LoadDepthMap(depthPath)
 		// 従来通り: 単一画像を 100% alpha で描画
 		img, ok := g.atlas.Get(sheetIdx, row, col)
 		if !ok || img == nil {
 			return
 		}
 
-		g.drawMeshWithAlpha(screen, img, 1.0)
+		g.drawMeshWithAlpha(screen, img, 1.0, depthMap, hasDepth)
 	}
 
 	if !g.uiHidden && g.tweaks.PanelVisible {
@@ -477,15 +518,33 @@ func (g *Game) Draw(screen *ebiten.Image) {
 }
 
 // drawMeshWithAlpha は画像をメッシュ経由で指定 alpha で screen に描画する。
-// Phase 4.1: DrawTriangles ベースの描画パス。将来 4.2 で depth map による
-// 頂点変位を追加する際の拡張ポイント。
-func (g *Game) drawMeshWithAlpha(screen, img *ebiten.Image, alpha float64) {
+// Phase 4.1: DrawTriangles ベースの描画パス。
+// Phase 4.2: depth map がある場合は elastic morph を適用したメッシュを生成。
+func (g *Game) drawMeshWithAlpha(screen, img *ebiten.Image, alpha float64, depthMap *image.Gray, hasDepth bool) {
 	if img == nil {
 		return
 	}
 	iw, ih := img.Bounds().Dx(), img.Bounds().Dy()
-	mesh := g.getMeshForImage(iw, ih)
-	render.DrawMeshWithAlpha(screen, img, mesh, float32(alpha))
+
+	if hasDepth && depthMap != nil {
+		// Phase 4.2: depth-weighted elastic morph メッシュ
+		params := render.MorphParams{
+			DepthMap: depthMap,
+			ElX:     g.morphElastic.ElX,
+			ElY:     g.morphElastic.ElY,
+			Alpha:   alpha,
+		}
+		mesh := render.GenerateMorphedMesh(
+			float64(iw), float64(ih),
+			float64(g.width), float64(g.height),
+			params,
+		)
+		render.DrawMesh(screen, img, mesh)
+	} else {
+		// Phase 4.1 fallback: フラットメッシュ
+		mesh := g.getMeshForImage(iw, ih)
+		render.DrawMeshWithAlpha(screen, img, mesh, float32(alpha))
+	}
 }
 
 // currentCell は現在の camera mode に応じた atlas cell を返す。
@@ -504,11 +563,10 @@ func (g *Game) currentCell() (row, col int) {
 	return g.mouse.Cell()
 }
 
-// sheetForState は現在の (eyesState, mouthState) に対応する sheet index を返す。
+// sheetForState は現在の (eyesState, mouthState) に対応する sheet name と index を返す。
 // character.Config.SheetFor (元 character-config.js の sheets マッピング) に委譲。
-func (g *Game) sheetForState() int {
-	_, idx := g.atlas.SheetFor(g.eyesClosed, g.mouthState)
-	return idx
+func (g *Game) sheetForState() (string, int) {
+	return g.atlas.SheetFor(g.eyesClosed, g.mouthState)
 }
 
 // Layout はウィンドウサイズを返す。

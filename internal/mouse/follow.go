@@ -85,3 +85,12 @@ func (f *Follower) target() (x, y float64) {
 func (f *Follower) current() (x, y float64) {
 	return f.currentX, f.currentY
 }
+
+// Current は現在の追従位置を正規化座標 [-1, 1] で返す。
+// x: 左=-1.0 / 中央=0.0 / 右=+1.0 (yaw 方向)
+// y: 上=-1.0 / 中央=0.0 / 下=+1.0 (pitch 方向)
+//
+// Phase 4.2: depth-weighted elastic morph の入力源として使用。
+func (f *Follower) Current() (x, y float64) {
+	return f.currentX, f.currentY
+}
