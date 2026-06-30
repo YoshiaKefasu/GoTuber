@@ -325,7 +325,7 @@ GoTuber/
 | **Phase 1.13a** | ✅ 完了 | マイク選択 + TOML 永続化 — malgo `Devices` 列挙 → ebitenui `ListComboButton` (ComboBox) ドロップダウン → 選択デバイスの malgo 内部 ID を `os.UserConfigDir()/GoTuber/config.toml` に保存 → 再起動時復元 (ID 照合で重複表示名も問題なし) |
 | **Phase 1.14** | ✅ 完了 | **終了ショートカット削除 + audio lifecycle fix** — `Esc` / `Q` キー検出と `killswitch.Install()` の Windows 限定削除 (Unix は `signal.Notify` 維持 = Ctrl+C graceful)。**真因判明**: Phase 1.13a visual test で F1 押下時に ListComboBox 初期選択 → `onDeviceSelected("")` → `Mover.Restart("")` → `NewCaptureByID()` の defer で成功 path も context 解放 → 次回 `Capture.Stop()` で double-free → 即終了。修正: `cleanupCtx` フラグで success/error 分離、`Mover.Restart` を失敗時旧 capture 温存化、main.go の guard で同一 device ID 選択 no-op。 |
 | Phase 2 | ✅ 完了 | カメラ VTuber: 頭の方向 + 瞬き (EAR)、Python サイドカー + localhost TCP JSONL |
-| Phase 3 | 仕様固定中 | Creator Tools: 1 枚入力 → A 25 枚 → 目眉/口マスク → AI 補完で 150 枚。Phase 3.6 で Depth Anything v3 を使った Morph Renderer 用 depth map のオフライン生成を予定 |
+| Phase 3 | Creator Tools: 1 枚入力 → A 25 枚 → 目眉/口マスク → AI 補完で 150 枚。Phase 3.6 で Depth Anything v3 を使った Morph Renderer 用 depth map のオフライン生成を実装済み（RTX 2060 で A〜F 全150枚 GPU 生成完了） |
 | Phase 4 | 計画中 | Morph Renderer: αブレンド + mesh + depth-weighted elastic morph でセル切り替えを滑らかに見せる |
 
 設計判断とフェーズ詳細: [docs/PLAN.md](docs/PLAN.md) / [docs/PHASE1.md](docs/PHASE1.md) 参照。
@@ -380,7 +380,7 @@ Phase 1.10 時点で:
 
 ✅ **Phase 1 コア完了 (1.1〜1.12)** — コードレビュー対応済み、`go test ./...` 全パス (Windows バイナリ 19.5 MB / Linux バイナリ 25 MB)。キャラクターシステムは元 [tomari-guruguru](https://github.com/rotejin/tomari-guruguru) から 100% port (camelCase 設定、Y軸反転なし、1200×1200 anchored WebP、元 648 行スライスツール MIT 継承)。
 
-🔜 **次の予定**: Phase 3 Creator Tools（Phase 3.1 build-a CLI → Phase 3.6 depth map generator）。その後 Phase 4 Morph Renderer（`docs/PHASE4.md`）へ進む。
+🔜 **次の予定**: Phase 3 Creator Tools（Phase 3.1 build-a CLI → Phase 3.2 マスク生成）。その後 Phase 4 Morph Renderer（`docs/PHASE4.md`）へ進む。Phase 3.6 Depth Map Generator は完了済み（A〜F 全150枚、DA3 GPU 生成済み）。
 
 - プラン: [docs/PLAN.md](docs/PLAN.md) v0.4.8
 - Phase 1.12 詳細: [docs/PHASE1.md](docs/PHASE1.md) Section 9

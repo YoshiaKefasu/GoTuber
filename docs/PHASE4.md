@@ -1,6 +1,6 @@
 # GoTuber — Phase 4: Morph Renderer 詳細設計
 
-> **ステータス**: 未着手（Phase 3.6 depth map 生成後に開始）
+> **ステータス**: 未着手（Phase 3.6 depth map 生成は完了済み）
 > **最終更新**: 2026-06-30
 > **親プラン**: [PLAN.md](./PLAN.md) v0.4.8
 

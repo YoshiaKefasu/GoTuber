@@ -43,8 +43,38 @@ PIP="$VENV_DIR/bin/pip"
 echo "--- Upgrading pip / wheel / setuptools ---"
 "$PIP" install --upgrade pip wheel setuptools
 
-echo "--- Installing requirements from $REQ_FILE (prefer-binary) ---"
-"$PIP" install --prefer-binary -r "$REQ_FILE"
+echo "--- Installing CUDA-enabled PyTorch (cu121) ---"
+"$PIP" install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+
+echo "--- Installing xformers (DA3 required dependency) ---"
+# xformers は torch バージョンに厳密に一致する必要がある。
+# torch 2.5.x → xformers 0.0.28.post3 (from source build)
+"$PIP" install "xformers==0.0.28.post3" || echo "WARN: xformers install failed (DA3 may still work without memory-efficient attention)"
+
+echo "--- Installing remaining requirements from $REQ_FILE ---"
+"$PIP" install -r "$REQ_FILE"
+
+# CUDA 利用可能か診断
+echo
+echo "--- Checking CUDA availability ---"
+"$VENV_DIR/bin/python" -c "
+import sys
+try:
+    import torch
+    cuda_ok = torch.cuda.is_available()
+    if cuda_ok:
+        name = torch.cuda.get_device_name(0)
+        ver = torch.version.cuda
+        print(f'  OK: CUDA {ver} — {name}')
+    else:
+        print('  WARN: torch.cuda.is_available() = False. CPU inference will be used.')
+        print('        If you have an NVIDIA GPU, check that CUDA toolkit matches torch CUDA version.')
+        print('        Manual fix: .venv-depth/bin/pip install torch --index-url https://download.pytorch.org/whl/cu121')
+except ImportError:
+    print('  WARN: torch not installed — depth generation will not work.')
+except Exception as e:
+    print(f'  WARN: CUDA check failed: {e}')
+"
 
 echo
 echo "Phase 3.6 Depth Anything v3 environment setup complete. Activate: source .venv-depth/bin/activate"

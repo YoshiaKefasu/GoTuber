@@ -516,6 +516,136 @@ def test_validate_depth_nonexistent_input() -> None:
     assert rc == 1
 
 
+# ---------- alpha-aware 正規化テスト ----------
+
+
+def test_normalize_depth_alpha_aware_foreground_only() -> None:
+    """前景ピクセルのみで正規化される (透明背景が min/max を汚染しない)。"""
+    if not HAS_PILLOW:
+        print("SKIP: Pillow not installed")
+        return
+
+    import numpy as np
+
+    # depth map: 中央に前景 (値 10-20)、周囲に背景 (値 0-5)
+    depth = np.zeros((100, 100), dtype=np.float32)
+    depth[30:70, 30:70] = np.linspace(10, 20, 40 * 40).reshape(40, 40)
+
+    # RGBA: 中央のみ不透過、周囲は透明
+    rgba = Image.new("RGBA", (100, 100), (0, 0, 0, 0))
+    for y in range(30, 70):
+        for x in range(30, 70):
+            rgba.putpixel((x, y), (100, 150, 200, 255))
+
+    result = gc._normalize_depth_alpha_aware(depth, rgba)
+
+    # 前景のみで正規化されるため、前景領域に明確なグラデーションがある
+    fg_center = result[50, 50]
+    fg_edge = result[30, 30]
+    # 中心が手前(白寄り)、端が奥(黒寄り) — depth が大きいほど白くなる
+    assert fg_center != fg_edge, "前景区域内にグラデーションがあるべき"
+
+    # 透明背景部分は正規化に影響しない (0 or 255 にclipped)
+    bg_val = result[0, 0]
+    assert bg_val in (0, 255), f"背景値 {bg_val} は 0 or 255 であるべき"
+
+
+def test_normalize_depth_alpha_aware_no_alpha_channel() -> None:
+    """alpha が全て 255 の場合でも動作する。"""
+    if not HAS_PILLOW:
+        print("SKIP: Pillow not installed")
+        return
+
+    import numpy as np
+
+    depth = np.linspace(0, 255, 100 * 100).reshape(100, 100).astype(np.float32)
+    rgba = Image.new("RGBA", (100, 100), (100, 150, 200, 255))
+
+    result = gc._normalize_depth_alpha_aware(depth, rgba)
+
+    # 全前景なので通常正規化と同等
+    assert result.shape == (100, 100)
+    assert result.dtype == np.uint8
+    assert result.min() == 0
+    assert result.max() == 255
+
+
+def test_normalize_depth_alpha_aware_all_transparent() -> None:
+    """全透過画像でもクラッシュしない。"""
+    if not HAS_PILLOW:
+        print("SKIP: Pillow not installed")
+        return
+
+    import numpy as np
+
+    depth = np.full((100, 100), 42.0, dtype=np.float32)
+    rgba = Image.new("RGBA", (100, 100), (0, 0, 0, 0))
+
+    result = gc._normalize_depth_alpha_aware(depth, rgba)
+
+    # 定数深度 → 全面 128
+    assert result.shape == (100, 100)
+    assert np.all(result == 128)
+
+
+def test_generate_depth_heuristic_with_alpha_aware() -> None:
+    """heuristic バックエンドで alpha-aware な正規化が適用される。"""
+    if not HAS_PILLOW:
+        print("SKIP: Pillow not installed")
+        return
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir) / "testchar"
+        base.mkdir()
+
+        # 透過背景のテスト画像を作成
+        sheet_dir = base / "A"
+        sheet_dir.mkdir()
+        for r in range(gc.ROWS):
+            for c in range(gc.COLS):
+                img = Image.new("RGBA", (1200, 1200), (0, 0, 0, 0))
+                # 中央に前景を描画
+                foreground = Image.new("RGBA", (600, 600), (100, 150, 200, 255))
+                img.paste(foreground, (300, 300))
+                img.save(sheet_dir / gc.cell_filename(r, c, "webp"), "WEBP")
+
+        args = argparse.Namespace(
+            input=str(base), sheets="A", backend="heuristic",
+            ext="webp", force=False,
+        )
+        rc = gc.cmd_generate_depth(args)
+        assert rc == 0
+
+        # 出力が存在することを確認
+        depth_dir = base / "A" / gc.DEPTH_DIR_NAME
+        files = list(depth_dir.glob("r*.png"))
+        assert len(files) == 25
+
+
+# ---------- batch-size 引数テスト ----------
+
+
+def test_cli_generate_depth_batch_size_accepted() -> None:
+    """--batch-size 引数が実パーサーで受け入れられる。"""
+    from gotuber_creator import _build_parser
+    p = _build_parser()
+    args = p.parse_args([
+        "generate-depth", "--input", "/tmp/test",
+        "--batch-size", "4",
+    ])
+    assert args.batch_size == 4
+
+
+def test_cli_generate_depth_batch_size_default() -> None:
+    """--batch-size 省略時はデフォルト 1。"""
+    from gotuber_creator import _build_parser
+    p = _build_parser()
+    args = p.parse_args([
+        "generate-depth", "--input", "/tmp/test",
+    ])
+    assert args.batch_size == 1
+
+
 # ---------- CLI 統合テスト ----------
 
 
@@ -558,6 +688,12 @@ def run_all_tests() -> int:
         test_generate_depth_manual_missing_error,
         test_generate_depth_nonexistent_input,
         test_validate_depth_nonexistent_input,
+        test_normalize_depth_alpha_aware_foreground_only,
+        test_normalize_depth_alpha_aware_no_alpha_channel,
+        test_normalize_depth_alpha_aware_all_transparent,
+        test_generate_depth_heuristic_with_alpha_aware,
+        test_cli_generate_depth_batch_size_accepted,
+        test_cli_generate_depth_batch_size_default,
         test_cli_validate_depth_help,
         test_cli_generate_depth_help,
     ]

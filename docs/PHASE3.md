@@ -581,6 +581,22 @@ python tools/gotuber_creator.py generate-depth `
 
 または、既定 backend を使う場合は `--backend` 省略を許可する。
 
+#### 3.6.3a batch 推論
+
+- `--batch-size` で推論バッチサイズを調整可能（既定: **1**）
+- RTX 2060 12GB では `--batch-size 1` が安定（8 以上は CUDA OOM の可能性あり）
+- batch-size=1 でも GPU 利用は正常（1枚 約0.57秒、A〜F 全150枚 約86秒）
+
+#### 3.6.3b alpha-aware 正規化 + 背景クリア
+
+generate-depth は以下の後処理を自動適用する。
+
+1. **alpha-aware 正規化**: alpha>0 のキャラ領域だけで depth の min/max を計算し、背景が depth 正規化に影響しない
+2. **背景クリア**: alpha=0 のピクセルは depth=0（黒）に確定
+3. **境界フェザー**: alpha 境界の数pxをガウシアンブラーで滑らかにし、輪郭の急な段差を防止
+
+これにより、出力される depth map はキャラ外周が真っ黒で、輪郭だけ滑らかなグラデーションになる。
+
 #### 3.6.4 validate-depth
 
 `validate-depth` は depth map が Phase 4 で読める形になっているかだけを確認する。

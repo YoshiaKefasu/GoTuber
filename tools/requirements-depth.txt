@@ -2,7 +2,23 @@
 # pip install -r tools/requirements-depth.txt
 # セットアップ手順: docs/PHASE3.md Section 3.6 参照
 # 注意: GoTuber 本体 runtime には不要。Creator Tools の depth map 生成時だけ使う。
+#
+# CUDA 注意:
+#   このファイルは CUDA 版の PyTorch を明示的に指定している。
+#   Windows + NVIDIA GPU 環境では RTX 2060 等の CUDA デバイスが自動利用される。
+#   GPU が無い環境でも動作するが、CPU 推論は遅い。
+#   torch の CUDA バージョンが合わない場合:
+#     pip install torch --index-url https://download.pytorch.org/whl/cu121
 
-depth-anything-3
-numpy>=1.24.0
+# PyTorch は setup-depth.{ps1,sh} 側で先に CUDA 版を明示インストールする。
+# ここでは torch 以外の依存だけを入れる。
+
+# 重要: scipy 1.18+ は numpy>=2.0.0 を要求する。
+# 旧 numpy 1.x は scipy.sparse._sputils で np.long AttributeError になる。
+# xformers は DA3 の必須依存。setup-depth.ps1 で torch バージョンに合わせてインストールすること。
+
+git+https://github.com/bytedance-seed/depth-anything-3.git
+numpy>=2.0.0,<2.8.0
+scipy>=1.14.0
 Pillow>=10.0.0,<12
+opencv-python>=4.8.0
