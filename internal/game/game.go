@@ -67,10 +67,29 @@ type DeviceListMessage struct {
 
 // ─── Phase 4.0: Cell Transition α-blend ───────────────────────────────────
 
+// easeInOutCubic は [0,1] の progress を ease-in-out cubic で変換する。
+// Adobe 系の「ヌルっと」した加速・減速カーブに近い。
+// 入出力はともに [0.0, 1.0] 範囲を保証する。
+//
+//	p < 0.5 → 4p³      (ease-in: 加速)
+//	p >= 0.5 → 1 - (-2p+2)³/2 (ease-out: 減速)
+func easeInOutCubic(p float64) float64 {
+	if p < 0 {
+		return 0
+	}
+	if p > 1 {
+		return 1
+	}
+	if p < 0.5 {
+		return 4 * p * p * p
+	}
+	return 1 - math.Pow(-2*p+2, 3)/2
+}
+
 // cellTransition はセル切り替え時の α ブレンド遷移状態を保持する。
 //
 // 表示セル (sheetIdx, row, col) が変わったとき、旧セルから新セルへ
-// 一定時間 (default 250ms) かけてフェードクロスする。
+// 一定時間 (default 120ms) かけてフェードクロスする。
 // 純粋関数 updateTransition で状態を進めるため、ユニットテストで検証可能。
 type cellTransition struct {
 	fromSheet, fromRow, fromCol int   // フェードアウト中の旧セル
@@ -148,11 +167,15 @@ func updateTransition(
 }
 
 // transitionAlphas は遷移中の from/to アルファ値を返す純粋関数。
-// Phase 4.0 hotfix: from は常に 1.0 (opacity-preserving)、to のみ progress で重ねる。
+// Phase 4.0 hotfix: from は常に 1.0 (opacity-preserving)、to のみ easing+progress で重ねる。
+// Phase 4.5: linear progress ではなく easeInOutCubic を適用し、
+// Adobe 系の「ヌルっと」した加速・減速カーブを実現する。
+// from=1.0 を維持することで、遷移中間でもキャラが半透明にならず背景透けを防止する。
 // Draw() から抽出してユニットテストで検証可能にする。
 func transitionAlphas(progress float64) (fromAlpha, toAlpha float64) {
 	fromAlpha = 1.0
-	toAlpha = progress
+	eased := easeInOutCubic(progress)
+	toAlpha = eased
 	if toAlpha < 0 {
 		toAlpha = 0
 	} else if toAlpha > 1 {
@@ -223,8 +246,8 @@ type Game struct {
 	// ここを false にすると従来通りの即時切り替えに戻る。
 	transEnabled bool
 
-	// transDuration は遷移期間 (秒)。Phase 4.5 tuning: 250ms = 0.25s。
-	// Phase 4.3: Tweaks UI で 50〜400ms 範囲で調整可能。毎フレーム state から反映。
+	// transDuration は遷移期間 (秒)。Phase 4.5 tuning: 120ms = 0.12s。
+	// Phase 4.3: Tweaks UI で 50〜250ms 範囲で調整可能。毎フレーム state から反映。
 	transDuration float64
 
 	// trans は現在の遷移状態。updateTransition() で毎フレーム更新。
@@ -302,7 +325,7 @@ func New(
 		uiHidden:       false, // explicit: 初期は全 UI 表示状態 (F1 で開く)
 		devicesCh:      devicesCh,
 		transEnabled:   true,                           // Phase 4.0: α-blend 有効 (default)
-		transDuration:  0.25,                           // 250ms (Phase 4.5 tuning)
+		transDuration:  0.12,                           // 120ms (Phase 4.5 tuning: overlap 抑制)
 		prevSheet:      -1,
 		prevRow:        -1,
 		prevCol:        -1,

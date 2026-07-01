@@ -40,10 +40,10 @@ const (
 
 // Phase 4.3: Transition Duration スライダーの値域 (int ms、表示用)。
 // 内部表現 TransitionDuration は ms で保持し、game.go で /1000 して秒に変換。
-// 50..400ms。250ms が Phase 4.5 tuning デフォルト。
+// 50..250ms。120ms が Phase 4.5 tuning デフォルト。
 const (
 	transitionDurationSliderMin = 50
-	transitionDurationSliderMax = 400
+	transitionDurationSliderMax = 250
 )
 
 // Phase 2.8.1: game.CameraModeCamera と同じ値。
@@ -525,7 +525,7 @@ func NewPanel(face *text.GoTextFace, state *State, audioEnabled bool, initialDev
 	)
 	root.AddChild(morphStrSlider)
 
-	// Transition Duration スライダー (50..200 ms)
+	// Transition Duration スライダー (50..250 ms)
 	root.AddChild(widget.NewText(
 		widget.TextOpts.Text("Transition (ms)", facePtr, labelColorIdle),
 	))

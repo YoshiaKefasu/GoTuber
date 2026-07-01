@@ -52,7 +52,7 @@ type State struct {
 	MorphStrength float64
 
 	// TransitionDuration はセル切り替え α ブレンドの遷移期間 (ms)。
-	// 50..200ms 範囲。内部では秒に変換して game.transDuration に反映。
+	// 50..250ms 範囲。内部では秒に変換して game.transDuration に反映。
 	TransitionDuration float64
 
 	// UI 表示
@@ -85,7 +85,7 @@ func NewState() *State {
 		CameraEnabled:     true, // Phase 2.10.8: デフォルト ON
 		MorphEnabled:      true, // Phase 4.3: デフォルト ON
 		MorphStrength:     4.0,  // Phase 4.3 hotfix: 輪郭シワ防止のため 4px に縮小
-		TransitionDuration: 250.0, // Phase 4.5 tuning: 250ms — 低FPS感を緩和するためやや長め
+		TransitionDuration: 120.0, // Phase 4.5 tuning: 120ms — overlap 抑制
 		CameraMode:        "Mouse",
 		CameraRestartable: false,
 		PanelVisible:      false,
@@ -107,5 +107,5 @@ func (s *State) ResetToDefaults() {
 	s.CameraEnabled = true   // Phase 2.10.8
 	s.MorphEnabled = true    // Phase 4.3
 	s.MorphStrength = 4.0    // Phase 4.3 hotfix
-	s.TransitionDuration = 250.0 // Phase 4.5 tuning
+	s.TransitionDuration = 120.0 // Phase 4.5 tuning
 }

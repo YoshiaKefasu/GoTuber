@@ -1,6 +1,9 @@
 package game
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 // TestGame_ToggleUIHidden_TogglesValue は uiHidden フラグのトグル動作確認。
 // ebiten context に依存しない (純粋ロジック)。
@@ -41,6 +44,85 @@ func TestGame_PassthroughDesired(t *testing.T) {
 					tt.panelVisible, tt.uiHidden, got, tt.want)
 			}
 		})
+	}
+}
+
+// ─── Phase 4.5: easeInOutCubic 純粋関数テスト ─────────────────────────────
+
+func TestEaseInOutCubic_BoundaryValues(t *testing.T) {
+	// [0,1] → [0,1] の端点保証
+	tests := []struct {
+		input, want float64
+	}{
+		{0.0, 0.0},
+		{1.0, 1.0},
+	}
+	for _, tt := range tests {
+		got := easeInOutCubic(tt.input)
+		if math.Abs(got-tt.want) > 1e-10 {
+			t.Errorf("easeInOutCubic(%v) = %v, want %v", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestEaseInOutCubic_Midpoint(t *testing.T) {
+	// 中点 (0.5) は easeInOutCubic の定義で 0.5 にマッピングされる
+	// p < 0.5: 4*(0.5)^3 = 0.5 → 0.5 のとき p >= 0.5 ブランチ: 1 - (-2*0.5+2)^3/2 = 1 - 1^3/2 = 0.5
+	got := easeInOutCubic(0.5)
+	if math.Abs(got-0.5) > 1e-10 {
+		t.Errorf("easeInOutCubic(0.5) = %v, want 0.5", got)
+	}
+}
+
+func TestEaseInOutCubic_Symmetric(t *testing.T) {
+	// easeInOutCubic は p と 1-p で対称: ease(p) + ease(1-p) = 1
+	for _, p := range []float64{0.1, 0.2, 0.3, 0.4} {
+		a := easeInOutCubic(p)
+		b := easeInOutCubic(1 - p)
+		if math.Abs(a+b-1.0) > 1e-10 {
+			t.Errorf("easeInOutCubic(%v) + easeInOutCubic(%v) = %v, want 1.0", p, 1-p, a+b)
+		}
+	}
+}
+
+func TestEaseInOutCubic_MonotonicallyIncreasing(t *testing.T) {
+	// 単調増加: p1 < p2 → ease(p1) < ease(p2)
+	prev := 0.0
+	for i := 1; i <= 100; i++ {
+		p := float64(i) / 100.0
+		got := easeInOutCubic(p)
+		if got <= prev {
+			t.Errorf("easeInOutCubic(%v)=%v <= previous=%v, not monotonic", p, got, prev)
+		}
+		prev = got
+	}
+}
+
+func TestEaseInOutCubic_OutOfRangeClamped(t *testing.T) {
+	// 範囲外入力でも [0,1] を返す
+	if got := easeInOutCubic(-0.5); got != 0 {
+		t.Errorf("easeInOutCubic(-0.5) = %v, want 0", got)
+	}
+	if got := easeInOutCubic(1.5); got != 1 {
+		t.Errorf("easeInOutCubic(1.5) = %v, want 1", got)
+	}
+}
+
+func TestEaseInOutCubic_EaseInRegion(t *testing.T) {
+	// p < 0.5 では ease-in（加速）: 値が linear 以下
+	// linear: 0.25, ease: 4*(0.25)^3 = 0.0625
+	got := easeInOutCubic(0.25)
+	if got >= 0.25 {
+		t.Errorf("easeInOutCubic(0.25) = %v, want < 0.25 (ease-in region)", got)
+	}
+}
+
+func TestEaseInOutCubic_EaseOutRegion(t *testing.T) {
+	// p > 0.5 では ease-out（減速）: 値が linear 以上
+	// linear: 0.75, ease: 1 - (-2*0.75+2)^3/2 = 1 - 0.5^3/2 = 0.9375
+	got := easeInOutCubic(0.75)
+	if got <= 0.75 {
+		t.Errorf("easeInOutCubic(0.75) = %v, want > 0.75 (ease-out region)", got)
 	}
 }
 
@@ -376,29 +458,30 @@ func TestUpdateTransition_Oscillation_ProgressAlwaysInRange(t *testing.T) {
 
 func TestTransitionAlphas_FromAlwaysOne(t *testing.T) {
 	// Phase 4.0 hotfix: from 側の alpha は遷移中常に 1.0 であることを確認。
-	// 旧 cross-fade では from=1.0-progress だったため、遷移中にキャラ全体が
-	// 半透明になり背景が透けて見えていた。
+	// Phase 4.5: toAlpha は easing で変換されるが、from は常に 1.0。
 	progresses := []float64{0.0, 0.1, 0.3, 0.5, 0.7, 0.9, 1.0}
 	for _, p := range progresses {
 		fromAlpha, toAlpha := transitionAlphas(p)
 		if fromAlpha != 1.0 {
 			t.Errorf("progress=%v: fromAlpha=%v, want 1.0 (opacity-preserving)", p, fromAlpha)
 		}
-		if toAlpha != p {
-			t.Errorf("progress=%v: toAlpha=%v, want %v", p, toAlpha, p)
+		// toAlpha は easeInOutCubic(p) と一致すること
+		wantTo := easeInOutCubic(p)
+		if toAlpha != wantTo {
+			t.Errorf("progress=%v: toAlpha=%v, want easeInOutCubic(%v)=%v", p, toAlpha, p, wantTo)
 		}
 	}
 }
 
 func TestTransitionAlphas_ToClamped(t *testing.T) {
-	// toAlpha が [0, 1] 範囲にクランプされることを確認。
+	// toAlpha が [0, 1] 範囲にクランプされることを確認 (easing 適用後)。
 	tests := []struct {
 		progress float64
 		wantTo   float64
 	}{
 		{-0.5, 0.0},  // 負 → 0
 		{0.0, 0.0},   // 境界
-		{0.5, 0.5},   // 通常
+		{0.5, 0.5},   // 中点 (easing でも 0.5)
 		{1.0, 1.0},   // 境界
 		{1.5, 1.0},   // 超過 → 1.0
 	}
@@ -415,11 +498,43 @@ func TestTransitionAlphas_ToClamped(t *testing.T) {
 
 func TestTransitionAlphas_MidpointNotSemitransparent(t *testing.T) {
 	// 遷移中間点 (progress=0.5) でキャラが半透明にならないことを確認。
-	// from=1.0 + to=0.5 → from が全面を覆い、to が上に重なる。
-	// 合計 alpha が 1.0 を下回る (半透明になる) ことはない。
+	// from=1.0 + to=easing(0.5)=0.5 → from が全面を覆い、to が上に重なる。
+	// from=1.0 を維持するため、合計 alpha が 1.0 を下回ることはない。
 	fromAlpha, toAlpha := transitionAlphas(0.5)
 	if fromAlpha < 1.0 {
 		t.Errorf("midpoint: fromAlpha=%v, want 1.0 (character must stay opaque)", fromAlpha)
 	}
-	_ = toAlpha // to は 0.5 で OK（新セルがフェードイン）
+	if toAlpha != 0.5 {
+		t.Errorf("midpoint: toAlpha=%v, want 0.5 (easeInOutCubic(0.5)=0.5)", toAlpha)
+	}
+}
+
+// ─── Phase 4.5: easing 統合テスト ─────────────────────────────────────────
+
+func TestTransitionAlphas_Eased_AlphaRange(t *testing.T) {
+	// 0.0〜1.0 の全 progress で transitionAlphas の出力が [0,1] 範囲内であることを確認。
+	for i := 0; i <= 100; i++ {
+		p := float64(i) / 100.0
+		fromAlpha, toAlpha := transitionAlphas(p)
+		if fromAlpha < 0 || fromAlpha > 1 {
+			t.Errorf("progress=%v: fromAlpha=%v out of [0,1]", p, fromAlpha)
+		}
+		if toAlpha < 0 || toAlpha > 1 {
+			t.Errorf("progress=%v: toAlpha=%v out of [0,1]", p, toAlpha)
+		}
+	}
+}
+
+func TestTransitionAlphas_Eased_SlowerStart(t *testing.T) {
+	// easing により前半は linear より遅く、後半は linear より速くなることを確認。
+	// progress=0.25 のとき、linear なら toAlpha=0.25、easing なら 0.0625 (遅い)
+	_, toAlphaEarly := transitionAlphas(0.25)
+	if toAlphaEarly >= 0.25 {
+		t.Errorf("early phase: toAlpha=%v, want < 0.25 (ease-in region should be slower)", toAlphaEarly)
+	}
+	// progress=0.75 のとき、linear なら toAlpha=0.75、easing なら 0.9375 (速い)
+	_, toAlphaLate := transitionAlphas(0.75)
+	if toAlphaLate <= 0.75 {
+		t.Errorf("late phase: toAlpha=%v, want > 0.75 (ease-out region should be faster)", toAlphaLate)
+	}
 }
