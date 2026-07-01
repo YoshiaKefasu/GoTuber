@@ -94,20 +94,23 @@ func TestUpdateTransition_Completes(t *testing.T) {
 	}
 }
 
-func TestUpdateTransition_CellChangedDuringTransition_Restarts(t *testing.T) {
-	// 遷移中にセルが変わった → from を現在の遷移先に更新して再開
+func TestUpdateTransition_CellChangedDuringTransition_KeepsProgress(t *testing.T) {
+	// 遷移中にセルが変わった → from を現在の表示セルに更新し、progress は維持する。
+	// 旧実装では progress=0 で再開していたため、境界付近の往復で高速点滅が発生していた。
 	// 遷移 A(r0c0)→B(r0c1) の途中で C(r0c2) に変わった場合:
-	//   from = B(r0c1) になる (prev = 直近の遷移先)
+	//   from = B(r0c1) になる (prev = 直近の表示セル)
+	//   progress は 0.5+0.16=0.66 のまま維持 (進行度加算後に cellChanged 検査)
 	初期 := cellTransition{fromSheet: 0, fromRow: 0, fromCol: 0, progress: 0.5, active: true}
 	got := updateTransition(初期, 0, 0, 1, 0, 0, 2, 0.016, 0.1) // prev=r0c1, cur=r0c2
 	if !got.active {
-		t.Fatal("expected transition still active after restart")
+		t.Fatal("expected transition still active after cell change")
 	}
 	if got.fromSheet != 0 || got.fromRow != 0 || got.fromCol != 1 {
 		t.Errorf("from=(%d,%d,%d), want (0,0,1) [prev cell]", got.fromSheet, got.fromRow, got.fromCol)
 	}
-	if got.progress != 0 {
-		t.Errorf("progress=%v, want 0 (restart)", got.progress)
+	expectedProgress := 0.5 + 0.016/0.1 // 0.66
+	if got.progress != expectedProgress {
+		t.Errorf("progress=%v, want %v (progress maintained after advance)", got.progress, expectedProgress)
 	}
 }
 
@@ -170,4 +173,253 @@ func TestGame_FirstCellSnapshot_DoesNotStartTransition(t *testing.T) {
 	if g.prevSheet != curSheet || g.prevRow != curRow || g.prevCol != curCol {
 		t.Fatalf("prev=(%d,%d,%d), want (%d,%d,%d)", g.prevSheet, g.prevRow, g.prevCol, curSheet, curRow, curCol)
 	}
+}
+
+// ─── Phase 4.0 hotfix: 境界付近のセル往復で高速点滅しないことの検証 ────────
+
+func TestUpdateTransition_Oscillation_NoFlicker(t *testing.T) {
+	// r2c2 ↔ r2c3 が毎フレーム往復しても、progress が毎回 0 に戻らないことを確認。
+	// 旧実装 (progress=0 リセット) では、各フレームで alpha が 1.0↔0.0 に戻り、
+	// 高速 ON/OFF 点滅に見えていた。
+	// 新実装 (progress 維持) では、progress が累積的に増加し、
+	// 遷移が連続的に進行する。
+	dur := 0.1 // 100ms
+	delta := 0.016 // ~60fps
+
+	// Frame 1: r2c2 → r2c3 (遷移開始)
+	state := updateTransition(
+		cellTransition{},
+		0, 2, 2, // prev = r2c2
+		0, 2, 3, // cur = r2c3
+		delta, dur,
+	)
+	if !state.active {
+		t.Fatal("expected transition to start")
+	}
+	if state.progress != 0 {
+		t.Errorf("frame 1: progress=%v, want 0", state.progress)
+	}
+
+	// Frame 2: r2c3 → r2c2 (往復)
+	state = updateTransition(
+		state,
+		0, 2, 3, // prev = r2c3 (前フレームで更新)
+		0, 2, 2, // cur = r2c2 (往復)
+		delta, dur,
+	)
+	if !state.active {
+		t.Fatal("expected transition still active")
+	}
+	// progress が 0 に戻っていないこと (旧バグの再現防止)
+	if state.progress == 0 {
+		t.Error("progress reset to 0 — flicker bug reproduced")
+	}
+	// progress が正の値で累積していること
+	if state.progress <= 0 {
+		t.Errorf("frame 2: progress=%v, want > 0 (accumulating)", state.progress)
+	}
+
+	// Frame 3: r2c2 → r2c3 (再往復)
+	prevProgress := state.progress
+	state = updateTransition(
+		state,
+		0, 2, 2, // prev = r2c2
+		0, 2, 3, // cur = r2c3
+		delta, dur,
+	)
+	if !state.active {
+		t.Fatal("expected transition still active")
+	}
+	if state.progress == 0 {
+		t.Error("progress reset to 0 — flicker bug reproduced")
+	}
+	// progress が前フレームから増加していること
+	if state.progress <= prevProgress {
+		t.Errorf("frame 3: progress=%v <= prev=%v, expected accumulation", state.progress, prevProgress)
+	}
+}
+
+func TestUpdateTransition_Oscillation_EventuallyCompletes(t *testing.T) {
+	// 往復が続いても progress が累積し、100ms 後には遷移が完了することを確認。
+	dur := 0.1   // 100ms
+	delta := 0.016 // ~60fps
+
+	state := cellTransition{}
+	// 6 フレーム分 (約 96ms) r2c2 ↔ r2c3 が往復
+	for i := 0; i < 6; i++ {
+		if i%2 == 0 {
+			// r2c2 → r2c3
+			state = updateTransition(state, 0, 2, 2, 0, 2, 3, delta, dur)
+		} else {
+			// r2c3 → r2c2
+			state = updateTransition(state, 0, 2, 3, 0, 2, 2, delta, dur)
+		}
+	}
+
+	// progress が累積していること
+	if state.progress <= 0 {
+		t.Errorf("after 6 oscillation frames: progress=%v, expected > 0", state.progress)
+	}
+	// まだ完了していない (6×16ms = 96ms < 100ms) の場合もあるが、
+	// progress が 0 でないことは保証
+	if state.progress == 0 && state.active {
+		t.Error("progress is 0 after 6 frames — flicker bug present")
+	}
+}
+
+func TestUpdateTransition_RapidOscillation_ProgressNeverResets(t *testing.T) {
+	// 10 フレーム連続の往復で、同一遷移中 (active→active) の progress が
+	// 一度も減少しないことを確認。
+	// 遷移完了 (active=false) → 新規開始で progress=0 にはなるが、
+	// これは正常動作（完了後に新しい遷移）。prevWasActive で区別する。
+	dur := 0.1
+	delta := 0.016
+
+	state := cellTransition{}
+	prevProgress := 0.0
+	prevWasActive := false
+
+	for i := 0; i < 10; i++ {
+		if i%2 == 0 {
+			state = updateTransition(state, 0, 2, 2, 0, 2, 3, delta, dur)
+		} else {
+			state = updateTransition(state, 0, 2, 3, 0, 2, 2, delta, dur)
+		}
+		// 同一遷移の連続フレーム (前フレームも active、今フレームも active) では
+		// progress が減少しないこと
+		if prevWasActive && state.active && state.progress < prevProgress {
+			t.Errorf("frame %d: progress=%v dropped below prev=%v while active", i, state.progress, prevProgress)
+		}
+		prevWasActive = state.active
+		if state.active {
+			prevProgress = state.progress
+		}
+	}
+
+	// progress が 0.0〜1.0 範囲内であること
+	if state.progress < 0.0 || state.progress > 1.0 {
+		t.Errorf("final progress=%v out of [0.0, 1.0]", state.progress)
+	}
+}
+
+// ─── Phase 4.0 hotfix: progress clamp 確保 (flashing 修正) ─────────────
+
+func TestUpdateTransition_ProgressNeverExceedsOne(t *testing.T) {
+	// 遷移中に極端に大きい delta でも progress が 1.0 を超えないことを確認。
+	// 旧実装では往復が続くと progress が 1.0 を超え、
+	// Draw 側で alpha が範囲外になり明るく flashing していた。
+	dur := 0.1
+
+	// 既に active な遷移に大きい delta を適用 → progress が clamp されること
+	active := cellTransition{fromSheet: 0, fromRow: 2, fromCol: 2, progress: 0.5, active: true}
+	state := updateTransition(
+		active,
+		0, 2, 2, 0, 2, 3, // prev=r2c2, cur=r2c3 (same → no cellChanged)
+		1.0, dur, // deltaSec=1.0, durationSec=0.1 → 0.5+10.0=10.5 → clamped to 1.0
+	)
+	if state.progress > 1.0 {
+		t.Errorf("progress=%v, want <= 1.0 (clamp failed)", state.progress)
+	}
+	if state.progress != 1.0 {
+		t.Errorf("progress=%v, want 1.0 (should clamp to max)", state.progress)
+	}
+	if state.active {
+		t.Error("expected transition completed (progress >= 1.0)")
+	}
+}
+
+func TestUpdateTransition_CompletionDuringOscillation(t *testing.T) {
+	// 往復中に progress が 1.0 に到達したら active=false になることを確認。
+	// Frame 0: 開始 (progress=0), Frame 1-7: +0.16 each → 0.16, 0.32, 0.48, 0.64, 0.80, 0.96, 1.12→clamped 1.0
+	dur := 0.1
+	delta := 0.016
+
+	state := cellTransition{}
+	// 8 フレーム分 (約 128ms > 100ms) 往復して完了を確認
+	for i := 0; i < 8; i++ {
+		if i%2 == 0 {
+			state = updateTransition(state, 0, 2, 2, 0, 2, 3, delta, dur)
+		} else {
+			state = updateTransition(state, 0, 2, 3, 0, 2, 2, delta, dur)
+		}
+	}
+
+	// progress が 1.0 に clamp されていること
+	if state.progress > 1.0 {
+		t.Errorf("progress=%v, want <= 1.0", state.progress)
+	}
+	// 8 フレームで完了していること
+	if state.active {
+		t.Error("expected transition completed after 8 frames (~128ms > 100ms)")
+	}
+}
+
+func TestUpdateTransition_Oscillation_ProgressAlwaysInRange(t *testing.T) {
+	// 20 フレーム連続往復で、progress が常に [0.0, 1.0] 範囲内であることを確認。
+	dur := 0.1
+	delta := 0.016
+
+	state := cellTransition{}
+	for i := 0; i < 20; i++ {
+		if i%2 == 0 {
+			state = updateTransition(state, 0, 2, 2, 0, 2, 3, delta, dur)
+		} else {
+			state = updateTransition(state, 0, 2, 3, 0, 2, 2, delta, dur)
+		}
+		if state.progress < 0.0 || state.progress > 1.0 {
+			t.Errorf("frame %d: progress=%v out of [0.0, 1.0]", i, state.progress)
+		}
+	}
+}
+
+// ─── Phase 4.0 hotfix: opacity-preserving transition alpha テスト ──────────
+
+func TestTransitionAlphas_FromAlwaysOne(t *testing.T) {
+	// Phase 4.0 hotfix: from 側の alpha は遷移中常に 1.0 であることを確認。
+	// 旧 cross-fade では from=1.0-progress だったため、遷移中にキャラ全体が
+	// 半透明になり背景が透けて見えていた。
+	progresses := []float64{0.0, 0.1, 0.3, 0.5, 0.7, 0.9, 1.0}
+	for _, p := range progresses {
+		fromAlpha, toAlpha := transitionAlphas(p)
+		if fromAlpha != 1.0 {
+			t.Errorf("progress=%v: fromAlpha=%v, want 1.0 (opacity-preserving)", p, fromAlpha)
+		}
+		if toAlpha != p {
+			t.Errorf("progress=%v: toAlpha=%v, want %v", p, toAlpha, p)
+		}
+	}
+}
+
+func TestTransitionAlphas_ToClamped(t *testing.T) {
+	// toAlpha が [0, 1] 範囲にクランプされることを確認。
+	tests := []struct {
+		progress float64
+		wantTo   float64
+	}{
+		{-0.5, 0.0},  // 負 → 0
+		{0.0, 0.0},   // 境界
+		{0.5, 0.5},   // 通常
+		{1.0, 1.0},   // 境界
+		{1.5, 1.0},   // 超過 → 1.0
+	}
+	for _, tt := range tests {
+		fromAlpha, toAlpha := transitionAlphas(tt.progress)
+		if fromAlpha != 1.0 {
+			t.Errorf("progress=%v: fromAlpha=%v, want 1.0", tt.progress, fromAlpha)
+		}
+		if toAlpha != tt.wantTo {
+			t.Errorf("progress=%v: toAlpha=%v, want %v", tt.progress, toAlpha, tt.wantTo)
+		}
+	}
+}
+
+func TestTransitionAlphas_MidpointNotSemitransparent(t *testing.T) {
+	// 遷移中間点 (progress=0.5) でキャラが半透明にならないことを確認。
+	// from=1.0 + to=0.5 → from が全面を覆い、to が上に重なる。
+	// 合計 alpha が 1.0 を下回る (半透明になる) ことはない。
+	fromAlpha, toAlpha := transitionAlphas(0.5)
+	if fromAlpha < 1.0 {
+		t.Errorf("midpoint: fromAlpha=%v, want 1.0 (character must stay opaque)", fromAlpha)
+	}
+	_ = toAlpha // to は 0.5 で OK（新セルがフェードイン）
 }

@@ -30,20 +30,20 @@ const (
 	sensitivitySliderMax = 200 // 20.0x
 )
 
-// Phase 4.3: Morph Strength スライダーの値域 (int、表示用)。
-// 内部表現 MorphStrength は 0.0..16.0 で保持し、スライダー値そのまま int。
-// 0 = morph 無効相当、8 = デフォルト控えめ、16 = 最大。
+// Phase 4.3 hotfix: Morph Strength スライダーの値域 (int、表示用)。
+// 内部表現 MorphStrength は 0.0..8.0 で保持し、スライダー値そのまま int。
+// 0 = morph 無効相当、4 = デフォルト、8 = 最大。
 const (
 	morphStrengthSliderMin = 0
-	morphStrengthSliderMax = 16
+	morphStrengthSliderMax = 8
 )
 
 // Phase 4.3: Transition Duration スライダーの値域 (int ms、表示用)。
 // 内部表現 TransitionDuration は ms で保持し、game.go で /1000 して秒に変換。
-// 50..200ms。100ms が PHASE4.md 仕様値。
+// 50..400ms。250ms が Phase 4.5 tuning デフォルト。
 const (
 	transitionDurationSliderMin = 50
-	transitionDurationSliderMax = 200
+	transitionDurationSliderMax = 400
 )
 
 // Phase 2.8.1: game.CameraModeCamera と同じ値。

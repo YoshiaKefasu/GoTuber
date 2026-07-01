@@ -44,11 +44,11 @@ func TestState_Defaults(t *testing.T) {
 	if !s.MorphEnabled {
 		t.Errorf("expected MorphEnabled=true (Phase 4.3 default), got false")
 	}
-	if s.MorphStrength != 8.0 {
-		t.Errorf("expected MorphStrength=8.0 (Phase 4.3 default), got %v", s.MorphStrength)
+	if s.MorphStrength != 4.0 {
+		t.Errorf("expected MorphStrength=4.0 (Phase 4.3 hotfix default), got %v", s.MorphStrength)
 	}
-	if s.TransitionDuration != 100.0 {
-		t.Errorf("expected TransitionDuration=100.0 (Phase 4.3 default), got %v", s.TransitionDuration)
+	if s.TransitionDuration != 250.0 {
+		t.Errorf("expected TransitionDuration=250.0 (Phase 4.5 tuning default), got %v", s.TransitionDuration)
 	}
 	if s.PanelVisible {
 		t.Errorf("expected PanelVisible=false, got true")
@@ -174,14 +174,14 @@ func TestSliderConstants(t *testing.T) {
 	if morphStrengthSliderMin != 0 {
 		t.Errorf("morphStrengthSliderMin (%d) should be 0", morphStrengthSliderMin)
 	}
-	if morphStrengthSliderMax != 16 {
-		t.Errorf("morphStrengthSliderMax (%d) should be 16", morphStrengthSliderMax)
+	if morphStrengthSliderMax != 8 {
+		t.Errorf("morphStrengthSliderMax (%d) should be 8 (Phase 4.3 hotfix)", morphStrengthSliderMax)
 	}
 	if transitionDurationSliderMin != 50 {
 		t.Errorf("transitionDurationSliderMin (%d) should be 50", transitionDurationSliderMin)
 	}
-	if transitionDurationSliderMax != 200 {
-		t.Errorf("transitionDurationSliderMax (%d) should be 200", transitionDurationSliderMax)
+	if transitionDurationSliderMax != 400 {
+		t.Errorf("transitionDurationSliderMax (%d) should be 400", transitionDurationSliderMax)
 	}
 }
 
@@ -611,11 +611,11 @@ func TestState_MorphDefaults(t *testing.T) {
 	if !s.MorphEnabled {
 		t.Error("MorphEnabled should default to true")
 	}
-	if s.MorphStrength != 8.0 {
-		t.Errorf("MorphStrength should default to 8.0, got %v", s.MorphStrength)
+	if s.MorphStrength != 4.0 {
+		t.Errorf("MorphStrength should default to 4.0 (Phase 4.3 hotfix), got %v", s.MorphStrength)
 	}
-	if s.TransitionDuration != 100.0 {
-		t.Errorf("TransitionDuration should default to 100.0, got %v", s.TransitionDuration)
+	if s.TransitionDuration != 250.0 {
+		t.Errorf("TransitionDuration should default to 250.0, got %v", s.TransitionDuration)
 	}
 }
 
@@ -664,10 +664,10 @@ func TestResetToDefaults_ResetsMorphFields(t *testing.T) {
 	if !s.MorphEnabled {
 		t.Error("ResetToDefaults should set MorphEnabled=true")
 	}
-	if s.MorphStrength != 8.0 {
-		t.Errorf("ResetToDefaults should set MorphStrength=8.0, got %v", s.MorphStrength)
+	if s.MorphStrength != 4.0 {
+		t.Errorf("ResetToDefaults should set MorphStrength=4.0 (Phase 4.3 hotfix), got %v", s.MorphStrength)
 	}
-	if s.TransitionDuration != 100.0 {
-		t.Errorf("ResetToDefaults should set TransitionDuration=100.0, got %v", s.TransitionDuration)
+	if s.TransitionDuration != 250.0 {
+		t.Errorf("ResetToDefaults should set TransitionDuration=250.0, got %v", s.TransitionDuration)
 	}
 }

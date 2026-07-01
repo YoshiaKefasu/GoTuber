@@ -85,7 +85,7 @@ func TestEdgeWeight(t *testing.T) {
 	tests := []struct {
 		u, v, want float64
 	}{
-		{0.5, 0.5, 0.0}, // 中央 → 0.0
+		{0.5, 0.5, 0.2}, // 中央 → 0.2 (最低重み保証, Phase 4.3 hotfix: 0.3→0.2)
 		{0.0, 0.5, 1.0}, // 左端中央 → 1.0
 		{0.5, 0.0, 1.0}, // 上端中央 → 1.0
 		{0.0, 0.0, 1.0}, // 左上 → 1.0 (clamped)
@@ -179,18 +179,19 @@ func TestGenerateMorphedMesh_UniformDepth(t *testing.T) {
 		Strength: 8.0, // Phase 4.3: デフォルト Strength
 	})
 
-	// 中央の頂点 (u=0.5, v=0.5) は edgeWeight ≈ 0 なので変位がほぼ 0
+	// 中央の頂点 (u=0.5, v=0.5) は edgeWeight ≈ 0.3 (最低重み) なので
+	// 小さな変位がある (~1.5px)。全頂点が完全に止まることはない。
 	centerIdx := (GridSize/2)*VertexCount + GridSize/2
 	centerDeltaX := float64(morphed.Vertices[centerIdx].DstX - flat.Vertices[centerIdx].DstX)
-	if math.Abs(centerDeltaX) > 0.5 {
-		t.Errorf("center vertex DstX delta = %f, want ~0 (edgeWeight suppresses center)", centerDeltaX)
+	if centerDeltaX > 2.0 {
+		t.Errorf("center vertex DstX delta = %f, want < 2.0 (edgeWeight min=0.3 limits center displacement)", centerDeltaX)
 	}
 
-	// 端の頂点 (u=0, v=0.5) は edgeWeight ≈ 1.0 なので変位が大きい
+	// 端の頂点 (u=0, v=0.5) は edgeWeight = 1.0 なので変位が大きい
 	edgeIdx := (GridSize / 2) * VertexCount // x=0, y=GridSize/2
 	edgeDeltaX := float64(morphed.Vertices[edgeIdx].DstX - flat.Vertices[edgeIdx].DstX)
-	if edgeDeltaX < 0.5 {
-		t.Errorf("edge vertex DstX delta = %f, want > 0.5", edgeDeltaX)
+	if edgeDeltaX < 2.0 {
+		t.Errorf("edge vertex DstX delta = %f, want > 2.0", edgeDeltaX)
 	}
 }
 

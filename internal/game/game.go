@@ -70,7 +70,7 @@ type DeviceListMessage struct {
 // cellTransition はセル切り替え時の α ブレンド遷移状態を保持する。
 //
 // 表示セル (sheetIdx, row, col) が変わったとき、旧セルから新セルへ
-// 一定時間 (default 100ms) かけてフェードクロスする。
+// 一定時間 (default 250ms) かけてフェードクロスする。
 // 純粋関数 updateTransition で状態を進めるため、ユニットテストで検証可能。
 type cellTransition struct {
 	fromSheet, fromRow, fromCol int   // フェードアウト中の旧セル
@@ -91,8 +91,10 @@ type cellTransition struct {
 //
 // 動作:
 //   - 非遷移中にセルが変わった → 遷移開始 (from = prev)
-//   - 遷移中にセルが変わった → 遷移再開 (from = prev, progress=0)
-//     (prev は前フレームで更新済み = 直近の遷移先セル)
+//   - 遷移中にセルが変わった → from を更新して継続 (progress は維持)
+//     (prev は前フレームで更新済み = 直近の表示セル)
+//     progress=0 で再開すると境界付近の往復で高速点滅するため、
+//     進行度を維持して連続的に遷移させる。
 //   - 期間到達 → 遷移終了 (active=false)
 func updateTransition(
 	t cellTransition,
@@ -115,21 +117,48 @@ func updateTransition(
 	// 遷移中: 進行度を進める
 	t.progress += deltaSec / durationSec
 
-	if cellChanged {
-		// 遷移中にセルが変わった → 現在の遷移先を起点に再開
-		return cellTransition{
-			fromSheet: prevSheet, fromRow: prevRow, fromCol: prevCol,
-			progress: 0, active: true,
-		}
+	// progress を 0.0〜1.0 に clamp。
+	// 往復が続くと deltaSec が積み重なり 1.0 を超えることがある。
+	// 超えたまま active=true で返ると、Draw 側で alpha が範囲外になり
+	// 明るく flashing する。
+	if t.progress > 1.0 {
+		t.progress = 1.0
 	}
 
+	// 完了判定: clamp 後に progress >= 1.0 なら終了。
+	// cellChanged より前に置くことで、1.0 到達時に active=false を確定させる。
 	if t.progress >= 1.0 {
-		t.progress = 1.0
 		t.active = false
 		return t
 	}
 
+	if cellChanged {
+		// 遷移中にセルが変わった → from を現在の表示セルに更新し、
+		// progress は維持して再開する。
+		// progress=0 で再開すると、境界付近の細かい往復で
+		// 毎回 alpha が 1.0↔0.0 に戻り、高速 ON/OFF 点滅に見える。
+		// progress を維持することで、遷移が連続的に進行する。
+		return cellTransition{
+			fromSheet: prevSheet, fromRow: prevRow, fromCol: prevCol,
+			progress: t.progress, active: true,
+		}
+	}
+
 	return t
+}
+
+// transitionAlphas は遷移中の from/to アルファ値を返す純粋関数。
+// Phase 4.0 hotfix: from は常に 1.0 (opacity-preserving)、to のみ progress で重ねる。
+// Draw() から抽出してユニットテストで検証可能にする。
+func transitionAlphas(progress float64) (fromAlpha, toAlpha float64) {
+	fromAlpha = 1.0
+	toAlpha = progress
+	if toAlpha < 0 {
+		toAlpha = 0
+	} else if toAlpha > 1 {
+		toAlpha = 1
+	}
+	return
 }
 
 // ─── Game ──────────────────────────────────────────────────────────────────
@@ -194,8 +223,8 @@ type Game struct {
 	// ここを false にすると従来通りの即時切り替えに戻る。
 	transEnabled bool
 
-	// transDuration は遷移期間 (秒)。PHASE4.md 仕様値 100ms = 0.1s。
-	// Phase 4.3: Tweaks UI で 50〜200ms 範囲で調整可能。毎フレーム state から反映。
+	// transDuration は遷移期間 (秒)。Phase 4.5 tuning: 250ms = 0.25s。
+	// Phase 4.3: Tweaks UI で 50〜400ms 範囲で調整可能。毎フレーム state から反映。
 	transDuration float64
 
 	// trans は現在の遷移状態。updateTransition() で毎フレーム更新。
@@ -273,7 +302,7 @@ func New(
 		uiHidden:       false, // explicit: 初期は全 UI 表示状態 (F1 で開く)
 		devicesCh:      devicesCh,
 		transEnabled:   true,                           // Phase 4.0: α-blend 有効 (default)
-		transDuration:  0.1,                            // 100ms (PHASE4.md 仕様値)
+		transDuration:  0.25,                           // 250ms (Phase 4.5 tuning)
 		prevSheet:      -1,
 		prevRow:        -1,
 		prevCol:        -1,
@@ -514,10 +543,19 @@ func (g *Game) Draw(screen *ebiten.Image) {
 
 	targetElX := 0.0
 	targetElY := 0.0
-	if morphPossible && g.mouse != nil {
-		mx, my := g.mouse.Current()
-		targetElX = mx * float64(g.width) * 0.004
-		targetElY = my * float64(g.height) * 0.004
+	if morphPossible {
+		if g.cameraMode.Load() == cameraModeCamera {
+			// Phase 4.3 hotfix: camera mode では mouse cursor の干渉を排除し、
+			// 表示中の cell 位置から morph target を生成する。
+			// 5x5 grid (row,col ∈ [0,4]) を [-1.0, 1.0] に正規化。
+			cr, cc := g.currentCell()
+			targetElX = (float64(cc)/4.0*2.0 - 1.0) * float64(g.width) * 0.02
+			targetElY = (float64(cr)/4.0*2.0 - 1.0) * float64(g.height) * 0.02
+		} else if g.mouse != nil {
+			mx, my := g.mouse.Current()
+			targetElX = mx * float64(g.width) * 0.02
+			targetElY = my * float64(g.height) * 0.02
+		}
 	}
 	if morphPossible {
 		render.UpdateMorphElastic(&g.morphElastic, targetElX, targetElY)
@@ -549,10 +587,19 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		}
 
 		if fromOk && fromImg != nil {
-			g.drawMeshWithAlpha(screen, fromImg, 1.0-g.trans.progress, fromDepthMap, fromHasDepth, fromDepthPath)
+			// Phase 4.0 hotfix: from は常に alpha=1.0 で描画 (opacity-preserving transition)。
+			// 旧 cross-fade (1.0-progress) では遷移中にキャラ全体が半透明になり、
+			// 背景が透けて見えていた。from を不透明に固定し、to のみ progress で重ねる。
+			g.drawMeshWithAlpha(screen, fromImg, 1.0, fromDepthMap, fromHasDepth, fromDepthPath)
 		}
 		if toOk && toImg != nil {
-			g.drawMeshWithAlpha(screen, toImg, g.trans.progress, toDepthMap, toHasDepth, toDepthPath)
+			toAlpha := g.trans.progress
+			if toAlpha < 0 {
+				toAlpha = 0
+			} else if toAlpha > 1 {
+				toAlpha = 1
+			}
+			g.drawMeshWithAlpha(screen, toImg, toAlpha, toDepthMap, toHasDepth, toDepthPath)
 		}
 	} else {
 		// 従来通り: 単一画像を 100% alpha で描画
@@ -584,6 +631,14 @@ func (g *Game) drawMeshWithAlpha(screen, img *ebiten.Image, alpha float64, depth
 	if img == nil {
 		return
 	}
+
+	// 保険 clamp: alpha が範囲外の場合に備えて 0.0〜1.0 に収める。
+	if alpha < 0 {
+		alpha = 0
+	} else if alpha > 1 {
+		alpha = 1
+	}
+
 	iw, ih := img.Bounds().Dx(), img.Bounds().Dy()
 
 	// Phase 4.4: MorphEnabled=false / MorphStrength=0 / FPS fallback → flat mesh 強制

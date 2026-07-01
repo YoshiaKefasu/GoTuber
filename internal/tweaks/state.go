@@ -84,8 +84,8 @@ func NewState() *State {
 		AudioSensitivity:  10.0,
 		CameraEnabled:     true, // Phase 2.10.8: デフォルト ON
 		MorphEnabled:      true, // Phase 4.3: デフォルト ON
-		MorphStrength:     8.0,  // Phase 4.3: 控えめ 8px
-		TransitionDuration: 100.0, // Phase 4.3: 100ms (PHASE4.md 仕様値)
+		MorphStrength:     4.0,  // Phase 4.3 hotfix: 輪郭シワ防止のため 4px に縮小
+		TransitionDuration: 250.0, // Phase 4.5 tuning: 250ms — 低FPS感を緩和するためやや長め
 		CameraMode:        "Mouse",
 		CameraRestartable: false,
 		PanelVisible:      false,
@@ -106,6 +106,6 @@ func (s *State) ResetToDefaults() {
 	s.AudioSensitivity = 10.0
 	s.CameraEnabled = true   // Phase 2.10.8
 	s.MorphEnabled = true    // Phase 4.3
-	s.MorphStrength = 8.0    // Phase 4.3
-	s.TransitionDuration = 100.0 // Phase 4.3
+	s.MorphStrength = 4.0    // Phase 4.3 hotfix
+	s.TransitionDuration = 250.0 // Phase 4.5 tuning
 }

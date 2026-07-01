@@ -213,7 +213,7 @@ func GenerateMorphedMesh(imgW, imgH, screenW, screenH float64, params MorphParam
 		return mesh
 	}
 
-	strengthScale := params.Strength / 30.0
+	strengthScale := params.Strength / 10.0
 
 	// flat mesh の頂点座標をコピーして変位を適用
 	for i := range mesh.Vertices {
@@ -241,8 +241,8 @@ func GenerateMorphedMesh(imgW, imgH, screenW, screenH float64, params MorphParam
 }
 
 // edgeWeight は UV 座標から周辺重みを返す。
-// 中央 (0.5, 0.5) で 0.0、端 (0 or 1) で 1.0 に近づく。
-// 画面全体の平行移動を防ぐための重み。
+// 中央 (0.5, 0.5) で 0.3（最低重み保証）、端 (0 or 1) で 1.0 に近づく。
+// 顔中心も少し動かしつつ、輪郭をより強く動かすための重み。
 //
 // 純粋関数なのでユニットテストで検証可能。
 func edgeWeight(u, v float64) float64 {
@@ -256,6 +256,12 @@ func edgeWeight(u, v float64) float64 {
 	if w > 1.0 {
 		w = 1.0
 	}
+
+	// 最低重み 0.2 を保証 — 顔中心でも minimum の動きを確保し、
+	// 「中心が止まりすぎる」視覚感を回避する。
+	// Phase 4.3 hotfix: 0.3→0.2 に縮小し、輪郭のシワ感を緩和。
+	const minWeight = 0.2
+	w = w*(1.0-minWeight) + minWeight
 	return w
 }
 
