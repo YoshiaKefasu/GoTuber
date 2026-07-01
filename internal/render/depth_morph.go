@@ -179,6 +179,13 @@ type MorphParams struct {
 	ElY     float64      // 現在の elastic 変位 Y (スクリーンピクセル)
 	Alpha   float64      // アルファ値 (0.0〜1.0)
 	Strength float64     // 最大変位量 (ピクセル)。0 なら morph 無効。
+
+	// WarpX, WarpY は single-sprite liquify transition のための追加オフセット。
+	// セル変化時に old/new の (row,col) 差分から算出し、edgeWeight で
+	// 輪郭を強く・中心を弱く変位させる。depth map には依存しない。
+	// 遷移中以外は 0。
+	WarpX float64
+	WarpY float64
 }
 
 // edgeWeightTable は (VertexCount × VertexCount) の事前計算済み重みテーブル。
@@ -209,7 +216,10 @@ func init() {
 func GenerateMorphedMesh(imgW, imgH, screenW, screenH float64, params MorphParams) *MeshGrid {
 	mesh := GenerateFlatMesh(imgW, imgH, screenW, screenH, params.Alpha)
 
-	if params.DepthMap == nil || params.Strength == 0 {
+	// depth morph も transition warp もなければ flat mesh のまま返す。
+	hasDepthMorph := params.DepthMap != nil && params.Strength != 0
+	hasWarp := params.WarpX != 0 || params.WarpY != 0
+	if !hasDepthMorph && !hasWarp {
 		return mesh
 	}
 
@@ -223,15 +233,21 @@ func GenerateMorphedMesh(imgW, imgH, screenW, screenH float64, params MorphParam
 		u := float64(v.SrcX) / float64(imgW)
 		uv := float64(v.SrcY) / float64(imgH)
 
-		// depth map から深度値をサンプリング
-		depth := SampleDepth(params.DepthMap, u, uv)
-
 		// 事前計算済みの重みテーブルから取得 (sqrt 回避)
 		weight := edgeWeightTable[i]
 
-		// 変位量 = depth * elastic * strength * weight
-		offsetX := depth * params.ElX * strengthScale * weight
-		offsetY := depth * params.ElY * strengthScale * weight
+		var offsetX, offsetY float64
+
+		// depth-weighted elastic morph (既存)
+		if hasDepthMorph {
+			depth := SampleDepth(params.DepthMap, u, uv)
+			offsetX += depth * params.ElX * strengthScale * weight
+			offsetY += depth * params.ElY * strengthScale * weight
+		}
+
+		// transition warp (edge-weighted, depth 不依存)
+		offsetX += params.WarpX * weight
+		offsetY += params.WarpY * weight
 
 		v.DstX += float32(offsetX)
 		v.DstY += float32(offsetY)
@@ -241,7 +257,7 @@ func GenerateMorphedMesh(imgW, imgH, screenW, screenH float64, params MorphParam
 }
 
 // edgeWeight は UV 座標から周辺重みを返す。
-// 中央 (0.5, 0.5) で 0.3（最低重み保証）、端 (0 or 1) で 1.0 に近づく。
+// 中央 (0.5, 0.5) で 0.2（最低重み保証）、端 (0 or 1) で 1.0 に近づく。
 // 顔中心も少し動かしつつ、輪郭をより強く動かすための重み。
 //
 // 純粋関数なのでユニットテストで検証可能。
@@ -251,7 +267,7 @@ func edgeWeight(u, v float64) float64 {
 	dv := v - 0.5
 	dist := math.Sqrt(du*du + dv*dv)
 
-	// dist=0 → 0.0, dist>=0.5 → 1.0 に clamped
+	// dist=0 → 0.0, dist>=0.5 → 1.0 に clamped（minWeight remap 前）
 	w := dist / 0.5
 	if w > 1.0 {
 		w = 1.0

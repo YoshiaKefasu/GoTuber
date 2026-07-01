@@ -65,7 +65,7 @@ type DeviceListMessage struct {
 	Devices []audio.Device
 }
 
-// ─── Phase 4.0: Cell Transition α-blend ───────────────────────────────────
+// ─── Phase 4.x: Cell Transition ────────────────────────────────────────────
 
 // easeInOutCubic は [0,1] の progress を ease-in-out cubic で変換する。
 // Adobe 系の「ヌルっと」した加速・減速カーブに近い。
@@ -86,7 +86,7 @@ func easeInOutCubic(p float64) float64 {
 	return 1 - math.Pow(-2*p+2, 3)/2
 }
 
-// cellTransition はセル切り替え時の α ブレンド遷移状態を保持する。
+// cellTransition はセル切り替え時の transition 状態を保持する。
 //
 // 表示セル (sheetIdx, row, col) が変わったとき、旧セルから新セルへ
 // 一定時間 (default 120ms) かけてフェードクロスする。
@@ -166,22 +166,48 @@ func updateTransition(
 	return t
 }
 
-// transitionAlphas は遷移中の from/to アルファ値を返す純粋関数。
-// Phase 4.0 hotfix: from は常に 1.0 (opacity-preserving)、to のみ easing+progress で重ねる。
-// Phase 4.5: linear progress ではなく easeInOutCubic を適用し、
-// Adobe 系の「ヌルっと」した加速・減速カーブを実現する。
-// from=1.0 を維持することで、遷移中間でもキャラが半透明にならず背景透けを防止する。
-// Draw() から抽出してユニットテストで検証可能にする。
-func transitionAlphas(progress float64) (fromAlpha, toAlpha float64) {
-	fromAlpha = 1.0
-	eased := easeInOutCubic(progress)
-	toAlpha = eased
-	if toAlpha < 0 {
-		toAlpha = 0
-	} else if toAlpha > 1 {
-		toAlpha = 1
+// transitionWarp は single-sprite liquify transition のためのメッシュ変位オフセットを返す。
+//
+// progress < 0.5: 旧セル → 新セル方向へ warp を徐々に強く (0→1)
+// progress >= 0.5: 新セルに切り替わった後、逆向き warp が 0 へ減衰 (1→0)
+//
+// warpScale はスクリーンサイズに対する割合 (%)。1.5% で 1 セル分の差時に
+// 約 19px (1280px 基準) の変位。視認可能な liquify 効果を确保しつつ
+// 紙しわのような不自然な歪みを抑える。
+//
+// 純粋関数なのでユニットテストで検証可能。
+func transitionWarp(fromRow, fromCol, toRow, toCol int, progress float64, screenW, screenH float64) (warpX, warpY float64) {
+	dCol := float64(toCol - fromCol)
+	dRow := float64(toRow - fromRow)
+
+	const warpScale = 0.015 // スクリーン幅に対する warp 比率 (1.5%)
+
+	var warpFactor float64
+	if progress < 0.5 {
+		// 前半: 旧セル表示中、新セル方向へ徐々に変形
+		warpFactor = easeInOutCubic(progress * 2.0)
+	} else {
+		// 後半: 新セル表示中、逆向き warp が 0 へ減衰 (settling)
+		warpFactor = easeInOutCubic((1.0 - progress) * 2.0)
 	}
+
+	warpX = dCol * screenW * warpScale * warpFactor
+	warpY = dRow * screenH * warpScale * warpFactor
+
+	// 後半は逆向き (settling back from lean)
+	if progress >= 0.5 {
+		warpX = -warpX
+		warpY = -warpY
+	}
+
 	return
+}
+
+// transitionSpriteSelection は progress から表示するスプライトが旧セルか新セルかを返す。
+// progress < 0.5 → 旧セル、progress >= 0.5 → 新セル。
+// 純粋関数なのでユニットテストで検証可能。
+func transitionSpriteSelection(progress float64) bool {
+	return progress < 0.5
 }
 
 // ─── Game ──────────────────────────────────────────────────────────────────
@@ -554,7 +580,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	row, col := g.currentCell()
 	sheetName, sheetIdx := g.sheetForState()
 
-	// Phase 4.0: α ブレンド遷移中は旧セルと新セルを重ねて描画。
+	// Phase 4.6: transition 中は single-sprite liquify で 1 枚だけ描画。
 	// 遷移中でない場合は従来通り 1 枚描画。
 	// Phase 4.1: DrawImage から DrawTriangles (メッシュレンダリング) に切替。
 	// Phase 4.2: depth map があるセルは elastic morph を適用。
@@ -587,42 +613,54 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	// Phase 4.4: depth map 読み込みは morph が有効なときだけ。
 	// morph=false の場合、drawMeshWithAlpha は flat mesh パスしか取らないため、
 	// depth load + RWMutex lock + string key lookup を完全にスキップできる。
-	var fromDepthMap, toDepthMap *image.Gray
-	var fromHasDepth, toHasDepth bool
-	var fromDepthPath, toDepthPath string
-
+	// Phase 4.5+: fromDepthMap/toDepthPath は single-sprite transition で不要になったため削除。
 	if g.transEnabled && g.trans.active {
-		// 遷移元 (フェードアウト)
-		fromImg, fromOk := g.atlas.Get(g.trans.fromSheet, g.trans.fromRow, g.trans.fromCol)
-		// 遷移先 (フェードイン)
-		toImg, toOk := g.atlas.Get(sheetIdx, row, col)
+		// ─── Single-sprite Liquify Transition ─────────────────────────────
+		// 遷移中は常に 1 枚のスプライトのみ描画し、二重像を排除する。
+		//
+		// progress < 0.5: 旧セルを表示し、新セル方向へ liquify warp を適用
+		// progress >= 0.5: 新セルに切り替え、逆向き warp が 0 へ減衰 (settling)
+		//
+		//事故A/B 防止: fromImg + toImg の 2 枚重ね描画は廃止。
+		//事故C 防止: alpha は常に 1.0。progress は warp 係数にのみ使用。
+		//事故D 防止: warp は row/col 差分ベース。mouse へ依存しない。
+		//事故E 防止: warp は progress 応じて 0 に戻る。遷移終了後は静止画に収束。
+		//事故F 防止: transition 中は morphed mesh cache を bypass する。
 
-		if morphPossible {
-			// 旧セル / 新セルは別セルの可能性があるので、depth map も個別に読む。
-			fromDepthPath = ""
-			if fromSheetName := g.atlas.SheetName(g.trans.fromSheet); fromSheetName != "" {
-				fromDepthPath = g.atlas.DepthMapPath(fromSheetName, g.trans.fromRow, g.trans.fromCol)
+		showOld := transitionSpriteSelection(g.trans.progress)
+
+		var showImg *ebiten.Image
+		var showOk bool
+		var depthMap *image.Gray
+		var hasDepth bool
+
+		if showOld {
+			// 旧セル表示 + 新セル方向へ warp
+			showImg, showOk = g.atlas.Get(g.trans.fromSheet, g.trans.fromRow, g.trans.fromCol)
+			if morphPossible {
+				depthPath := ""
+				if fromSheetName := g.atlas.SheetName(g.trans.fromSheet); fromSheetName != "" {
+					depthPath = g.atlas.DepthMapPath(fromSheetName, g.trans.fromRow, g.trans.fromCol)
+				}
+				depthMap, hasDepth = render.LoadDepthMap(depthPath)
 			}
-			fromDepthMap, fromHasDepth = render.LoadDepthMap(fromDepthPath)
-
-			toDepthPath = g.atlas.DepthMapPath(sheetName, row, col)
-			toDepthMap, toHasDepth = render.LoadDepthMap(toDepthPath)
+		} else {
+			// 新セル表示 + 逆向き warp (settling)
+			showImg, showOk = g.atlas.Get(sheetIdx, row, col)
+			if morphPossible {
+				depthPath := g.atlas.DepthMapPath(sheetName, row, col)
+				depthMap, hasDepth = render.LoadDepthMap(depthPath)
+			}
 		}
 
-		if fromOk && fromImg != nil {
-			// Phase 4.0 hotfix: from は常に alpha=1.0 で描画 (opacity-preserving transition)。
-			// 旧 cross-fade (1.0-progress) では遷移中にキャラ全体が半透明になり、
-			// 背景が透けて見えていた。from を不透明に固定し、to のみ progress で重ねる。
-			g.drawMeshWithAlpha(screen, fromImg, 1.0, fromDepthMap, fromHasDepth, fromDepthPath)
-		}
-		if toOk && toImg != nil {
-			toAlpha := g.trans.progress
-			if toAlpha < 0 {
-				toAlpha = 0
-			} else if toAlpha > 1 {
-				toAlpha = 1
-			}
-			g.drawMeshWithAlpha(screen, toImg, toAlpha, toDepthMap, toHasDepth, toDepthPath)
+		if showOk && showImg != nil {
+			warpX, warpY := transitionWarp(
+				g.trans.fromRow, g.trans.fromCol,
+				row, col,
+				g.trans.progress,
+				float64(g.width), float64(g.height),
+			)
+			g.drawTransitionSprite(screen, showImg, warpX, warpY, depthMap, hasDepth)
 		}
 	} else {
 		// 従来通り: 単一画像を 100% alpha で描画
@@ -631,6 +669,8 @@ func (g *Game) Draw(screen *ebiten.Image) {
 			return
 		}
 
+		var toDepthMap *image.Gray
+		var toHasDepth bool
 		depthPath := ""
 		if morphPossible {
 			depthPath = g.atlas.DepthMapPath(sheetName, row, col)
@@ -682,6 +722,45 @@ func (g *Game) drawMeshWithAlpha(screen, img *ebiten.Image, alpha float64, depth
 		mesh := g.getMeshForImage(iw, ih)
 		render.DrawMeshWithAlpha(screen, img, mesh, float32(alpha))
 	}
+}
+
+// drawTransitionSprite は single-sprite liquify transition 用の描画ヘルパー。
+// 遷移中は常に 1 枚のスプライトのみ描画し、二重像 (overlap/ghosting) を完全に排除する。
+//
+// morphed mesh cache を使わず、毎フレームその場で GenerateMorphedMesh を呼ぶ。
+// 理由: transition warp は progress に依存し毎フレーム変わるため、
+// キャッシュキーが肥大化し、LRU 管理のコストが cache miss 回数を上回る。
+// transition は 100〜250ms の短時間のみのため、毎フレーム生成でも perf 影響は極小。
+func (g *Game) drawTransitionSprite(screen *ebiten.Image, img *ebiten.Image, warpX, warpY float64, depthMap *image.Gray, hasDepth bool) {
+	if img == nil {
+		return
+	}
+
+	iw, ih := img.Bounds().Dx(), img.Bounds().Dy()
+
+	morphOk := g.tweaks.MorphEnabled && !g.morphAutoDisable && g.tweaks.MorphStrength > 0 && hasDepth && depthMap != nil
+
+	params := render.MorphParams{
+		Alpha: 1.0,
+		WarpX: warpX,
+		WarpY: warpY,
+	}
+
+	if morphOk {
+		params.DepthMap = depthMap
+		params.ElX = g.morphElastic.ElX
+		params.ElY = g.morphElastic.ElY
+		params.Strength = g.tweaks.MorphStrength
+	}
+
+	// transition 中は cache bypass — 毎フレーム新規生成 (安全優先)
+	mesh := render.GenerateMorphedMesh(
+		float64(iw), float64(ih),
+		float64(g.width), float64(g.height),
+		params,
+	)
+
+	render.DrawMesh(screen, img, mesh)
 }
 
 // getMorphedMesh は elastic 変位を量子化したキーで morphed mesh をキャッシュから取得する。

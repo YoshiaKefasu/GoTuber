@@ -1,8 +1,8 @@
 # GoTuber — Phase 4: Morph Renderer 詳細設計
 
-> **ステータス**: Phase 4.0〜4.4 実装完了（Phase 3.6 depth map 生成も完了済み）
-> **最終更新**: 2026-06-30
-> **親プラン**: [PLAN.md](./PLAN.md) v0.4.9
+> **ステータス**: Phase 4.0〜4.6 実装完了（Phase 3.6 depth map 生成も完了済み）
+> **最終更新**: 2026-07-01
+> **親プラン**: [PLAN.md](./PLAN.md) v0.4.10
 
 ---
 
@@ -14,11 +14,11 @@ Phase 4 は **Morph Renderer** とする。
 
 GoTuber は Live2D / 3D rig を目指さない。Phase 4 では、以下の軽量な組み合わせで見た目を改善する。
 
-1. セル切り替え時の αブレンド
+1. セル切り替え時の短時間 transition
 2. 画像を小さな mesh に分割して描く Morph Renderer
 3. Phase 3.6 で生成した depth map による depth-weighted elastic deformation
 
-人間語で言うと、今の GoTuber は「パラパラ漫画」に近い。Phase 4 では、向きが変わる時に同じ画像を少しプリンのようにゆっくり曲げ、別セルへ移る時だけ αブレンドで滑らかにつなぐ。
+人間語で言うと、今の GoTuber は「パラパラ漫画」に近い。Phase 4 では、向きが変わる時に同じ画像を少しプリンのようにゆっくり曲げ、別セルへ移る瞬間も **Single-sprite Liquify transition** で旧絵と新絵の二重残像を出さずに滑らかにつなぐ。
 
 ---
 
@@ -102,9 +102,9 @@ internal/character/atlas.go
 
 ---
 
-## 5. Phase 4.0: Cell Transition αブレンド
+## 5. Phase 4.0: Cell Transition → 4.5/4.6 で Single-sprite Liquify へ発展
 
-最初に実装するのは、セル切り替え時の αブレンド。
+最初に実装したのは、セル切り替え時の αブレンド。
 
 現在の描画は、`currentCell()` が変わった瞬間に表示画像も即座に変わる。
 
@@ -113,7 +113,7 @@ old: A/r2c2.webp
 new: A/r2c3.webp
 ```
 
-Phase 4.0 では、一定フレームだけ old と new を重ねる。
+Phase 4.0 の初期案では、一定フレームだけ old と new を重ねる。
 
 ```text
 frame 0: old alpha 1.0 / new alpha 0.0
@@ -123,7 +123,7 @@ frame 2: old alpha 0.6 / new alpha 0.4
 final:   old alpha 0.0 / new alpha 1.0
 ```
 
-実装方針:
+Phase 4.0 初期方針:
 
 - 前回描画した `sheet,row,col` を保持する
 - 今回の `sheet,row,col` と違う場合だけ transition を開始する
@@ -136,6 +136,21 @@ final:   old alpha 0.0 / new alpha 1.0
 
 - mouth / blink の高速切り替えまで全部長く blend すると、口パクがぼやける可能性がある
 - 初期実装では head direction cell の切り替えを優先し、mouth/blink は短め transition または blend 無効も検討する
+
+実装結果と改訂:
+
+- **Phase 4.0**: αブレンド transition 実装
+- **Phase 4.5**: ease-in-out cubic + 120ms へ短縮して overlap 時間を削減
+- **Phase 4.6**: `from+to` の 2 枚描画を廃止し、**Single-sprite Liquify transition** へ移行
+  - `progress < 0.5`: 旧セル 1 枚を新セル方向へ warp
+  - `progress >= 0.5`: 新セル 1 枚へ切替し、逆向き warp を 0 へ減衰
+  - transition 中も **1 sprite only** なので、透明化や二重残像を避けやすい
+
+現在のデフォルト:
+
+- transition duration: **120ms**
+- easing: **easeInOutCubic**
+- transition warp: **cell 差分ベースの single-sprite liquify**
 
 DoD:
 
@@ -261,6 +276,8 @@ DoD:
 | 4.2 | Depth-weighted Elastic Morph | ✅ 実装完了 |
 | 4.3 | Tweaks UI 追加（Morph ON/OFF、強度、transition duration） | ✅ 実装完了 |
 | 4.4 | Performance tuning / fallback | ✅ 実装完了 |
+| 4.5 | Ease-in-out overlap tuning | ✅ 実装完了 |
+| 4.6 | Single-sprite Liquify transition | ✅ 実装完了 |
 
 Phase 4.0 と 4.1 は depth map なしでも実装できる。
 Phase 4.2 だけ Phase 3.6 の depth map generator に依存する。
@@ -281,13 +298,30 @@ Phase 4.2 だけ Phase 3.6 の depth map generator に依存する。
 
 ## 10. 完了基準 (DoD)
 
-- [x] αブレンドでセル切り替えの違和感が減る
+- [x] αブレンド初期実装から Single-sprite Liquify transition へ移行し、重なりを抑制できる
 - [x] mesh renderer ON/OFF で通常描画との見た目差分が小さい
 - [x] depth map があるセルだけ elastic morph できる
 - [x] depth map が無いセルは通常 mesh fallback になる
 - [x] Morph ON/OFF を Tweaks から切り替えられる
 - [x] 低 FPS 時は morph を自動 fallback して配信品質を守る
 - [x] Phase 1 / Phase 2 の mouth sync、blink、camera tracking に regression がない（`go test ./...` で確認）
+
+---
+
+## 8.5 Phase 4.5 / 4.6 実装メモ
+
+### Phase 4.5: Ease-in-out overlap tuning
+
+- `easeInOutCubic` を導入
+- transition default を **250ms → 120ms** に短縮
+- overlap を長く見せない方向へ tuning
+
+### Phase 4.6: Single-sprite Liquify transition
+
+- transition 中に `fromImg` と `toImg` を同時描画しない
+- transition warp は `from(row,col)` → `to(row,col)` の差分から計算
+- transition 中は morphed mesh cache を bypass し、毎フレーム生成で安全性優先
+- alpha crossfade は主役から外し、**頂点変形で lined up させる** 方針に変更
 
 ---
 

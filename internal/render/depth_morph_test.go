@@ -202,3 +202,86 @@ func TestDepthMapPath(t *testing.T) {
 		t.Errorf("DepthMapPath() = %q, want %q", path, want)
 	}
 }
+
+// ─── Phase 4.5+: Transition warp テスト ────────────────────────────────────
+
+func TestGenerateMorphedMesh_WarpOnly(t *testing.T) {
+	// depth map なし、warp のみ → flat mesh に warp が適用される
+	flat := GenerateFlatMesh(1200, 1200, 1280, 720, 1.0)
+	warpX := 20.0 // 右に 20px warp
+	morphed := GenerateMorphedMesh(1200, 1200, 1280, 720, MorphParams{
+		DepthMap: nil,
+		Alpha:    1.0,
+		WarpX:    warpX,
+		WarpY:    0,
+	})
+
+	// 頂点数は flat と同じ
+	if len(flat.Vertices) != len(morphed.Vertices) {
+		t.Errorf("vertex count mismatch: flat=%d morphed=%d", len(flat.Vertices), len(morphed.Vertices))
+	}
+
+	// 端の頂点 (u=0, v=0.5) は edgeWeight=1.0 なので warpX がそのまま適用される
+	edgeIdx := (GridSize / 2) * VertexCount // x=0, y=GridSize/2
+	deltaX := float64(morphed.Vertices[edgeIdx].DstX - flat.Vertices[edgeIdx].DstX)
+	if math.Abs(deltaX-warpX) > 0.1 {
+		t.Errorf("edge vertex DstX delta = %f, want ~%f (warpX)", deltaX, warpX)
+	}
+}
+
+func TestGenerateMorphedMesh_WarpAndDepth(t *testing.T) {
+	// depth map + warp の両方が適用されることを確認
+	grey := image.NewGray(image.Rect(0, 0, 1200, 1200))
+	for y := 0; y < 1200; y++ {
+		for x := 0; x < 1200; x++ {
+			grey.SetGray(x, y, color.Gray{Y: 255}) // 全白
+		}
+	}
+
+	flat := GenerateFlatMesh(1200, 1200, 1280, 720, 1.0)
+	warpX := 15.0
+	morphed := GenerateMorphedMesh(1200, 1200, 1280, 720, MorphParams{
+		DepthMap: grey,
+		ElX:      5.0,
+		ElY:      0,
+		Alpha:    1.0,
+		Strength: 8.0,
+		WarpX:    warpX,
+		WarpY:    0,
+	})
+
+	// 端の頂点: elastic morph + warp が両方適用される
+	edgeIdx := (GridSize / 2) * VertexCount
+	deltaX := float64(morphed.Vertices[edgeIdx].DstX - flat.Vertices[edgeIdx].DstX)
+
+	// elastic morph の寄与: depth=1.0 * ElX=5.0 * strengthScale=0.8 * weight=1.0 = 4.0
+	// warp の寄与: warpX=15.0 * weight=1.0 = 15.0
+	// 合計: ~19.0
+	if deltaX < 10.0 {
+		t.Errorf("edge vertex DstX delta = %f, want > 10 (elastic + warp combined)", deltaX)
+	}
+}
+
+func TestGenerateMorphedMesh_WarpDecaysWithEdgeWeight(t *testing.T) {
+	// warp は edgeWeight に依存するため、中心より端が大きく変位する
+	warpX := 20.0
+	morphed := GenerateMorphedMesh(1200, 1200, 1280, 720, MorphParams{
+		DepthMap: nil,
+		Alpha:    1.0,
+		WarpX:    warpX,
+		WarpY:    0,
+	})
+	flat := GenerateFlatMesh(1200, 1200, 1280, 720, 1.0)
+
+	// 中心頂点 (u=0.5, v=0.5): edgeWeight ≈ 0.2 → warpX * 0.2 ≈ 4.0
+	centerIdx := (GridSize/2)*VertexCount + GridSize/2
+	centerDelta := float64(morphed.Vertices[centerIdx].DstX - flat.Vertices[centerIdx].DstX)
+
+	// 端頂点 (u=0, v=0.5): edgeWeight = 1.0 → warpX * 1.0 = 20.0
+	edgeIdx := (GridSize / 2) * VertexCount
+	edgeDelta := float64(morphed.Vertices[edgeIdx].DstX - flat.Vertices[edgeIdx].DstX)
+
+	if edgeDelta <= centerDelta {
+		t.Errorf("edge delta (%f) should be > center delta (%f)", edgeDelta, centerDelta)
+	}
+}

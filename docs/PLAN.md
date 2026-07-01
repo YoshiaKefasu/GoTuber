@@ -1,7 +1,7 @@
 # GoTuber — 詳細プラン
 
-> **ステータス**: v0.4.9（Q1, Q3, Q4, Q12 確定、Q6 post_release 化、Q8 MediaPipe 即採用で確定、Phase 2 完了、Phase 3 Creator Tools 転換、Phase 3.6 depth map 生成完了、Phase 4 Morph Renderer 実装完了）
-> **作成日**: 2026-06-15 / 改訂 2026-06-15（v0.4: レビュー反映、v0.4.3: Q 確定反映）/ 2026-06-16（v0.4.4: Q6 post_release 化）/ 2026-06-17（v0.4.5: Q8 MediaPipe 即採用で確定）/ 2026-06-24（v0.4.7: Phase 3 Creator Tools 転換）/ 2026-06-30（v0.4.8: Phase 3.6 depth map + Phase 4 Morph Renderer 追加、v0.4.9: Phase 4 実装完了）
+> **ステータス**: v0.4.10（Q1, Q3, Q4, Q12 確定、Q6 post_release 化、Q8 MediaPipe 即採用で確定、Phase 2 完了、Phase 3 Creator Tools 転換、Phase 3.6 depth map 生成完了、Phase 4 Morph Renderer 実装完了、4.5 ease tuning + 4.6 Single-sprite Liquify transition 反映）
+> **作成日**: 2026-06-15 / 改訂 2026-06-15（v0.4: レビュー反映、v0.4.3: Q 確定反映）/ 2026-06-16（v0.4.4: Q6 post_release 化）/ 2026-06-17（v0.4.5: Q8 MediaPipe 即採用で確定）/ 2026-06-24（v0.4.7: Phase 3 Creator Tools 転換）/ 2026-06-30（v0.4.8: Phase 3.6 depth map + Phase 4 Morph Renderer 追加、v0.4.9: Phase 4 実装完了）/ 2026-07-01（v0.4.10: Phase 4.5 ease tuning + 4.6 Single-sprite Liquify transition）
 > **ベース**: `tomari-guruguru`（React/Vite/JSX）→ **Golang 完全書き換え**（確定）
 > **ターゲット OS**: Windows / Linux / macOS
 > **ビルド環境**: Windows 10/11（PowerShell + MSVC）または WSL Ubuntu（gcc）。KASOU は runtime 専用
@@ -391,7 +391,7 @@ YAML 読み込み後、**フェイルファスト** で以下を検証：
 | 2.10.7 | yaw ミラー補正 | 0.1 日 | ✅ 実装完了: 左右向きの体感一致 |
 | 3 | Creator Tools | 1〜2 週 | **Phase 3.0 仕様固定中** (2026-06-24) |
 | 3.6 | Depth Map Generator | 1〜2 日 | ✅ 実装完了: DA3 GPU (RTX 2060) + alpha-aware 正規化 + 背景クリア + batch推論。A〜F 全150枚生成済み |
-| 4 | Morph Renderer | 完了 | ✅ αブレンド + mesh + depth-weighted elastic morph + Tweaks UI + fallback |
+| 4 | Morph Renderer | 完了 | ✅ mesh + depth-weighted elastic morph + Tweaks UI + fallback + 4.5 ease tuning + 4.6 Single-sprite Liquify transition |
 
 各フェーズのゴール・実装項目・DoD・工数等の詳細は対応するファイル参照。
 
@@ -628,3 +628,5 @@ Phase 1 を以下の順序で進める。各ステップ完了時にコミット
 *v0.4.8 改訂: Phase 3.6 Depth Map Generator と Phase 4 Morph Renderer を追加。Phase 3 は depth map を作るだけに留め、Phase 4 で αブレンド・mesh・depth-weighted elastic deformation を runtime 描画層として扱う。*
 
 *v0.4.9 改訂: Phase 4 Morph Renderer 実装完了。Phase 4.0 αブレンド、4.1 mesh renderer、4.2 depth-weighted elastic morph、4.3 Tweaks UI、4.4 performance fallback まで完了。*
+
+*v0.4.10 改訂: Phase 4.5 で ease-in-out + 120ms transition tuning を追加し、Phase 4.6 で from/to 2枚重ねを廃止して Single-sprite Liquify transition へ移行。透明化と二重残像を避けつつ、cell 差分ベースの warp で lined-up させる現行描画仕様に更新。*

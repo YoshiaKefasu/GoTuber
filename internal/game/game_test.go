@@ -454,87 +454,104 @@ func TestUpdateTransition_Oscillation_ProgressAlwaysInRange(t *testing.T) {
 	}
 }
 
-// ─── Phase 4.0 hotfix: opacity-preserving transition alpha テスト ──────────
+// ─── Phase 4.5+: Single-sprite Liquify Transition テスト ───────────────────
 
-func TestTransitionAlphas_FromAlwaysOne(t *testing.T) {
-	// Phase 4.0 hotfix: from 側の alpha は遷移中常に 1.0 であることを確認。
-	// Phase 4.5: toAlpha は easing で変換されるが、from は常に 1.0。
-	progresses := []float64{0.0, 0.1, 0.3, 0.5, 0.7, 0.9, 1.0}
-	for _, p := range progresses {
-		fromAlpha, toAlpha := transitionAlphas(p)
-		if fromAlpha != 1.0 {
-			t.Errorf("progress=%v: fromAlpha=%v, want 1.0 (opacity-preserving)", p, fromAlpha)
-		}
-		// toAlpha は easeInOutCubic(p) と一致すること
-		wantTo := easeInOutCubic(p)
-		if toAlpha != wantTo {
-			t.Errorf("progress=%v: toAlpha=%v, want easeInOutCubic(%v)=%v", p, toAlpha, p, wantTo)
-		}
-	}
-}
-
-func TestTransitionAlphas_ToClamped(t *testing.T) {
-	// toAlpha が [0, 1] 範囲にクランプされることを確認 (easing 適用後)。
+func TestTransitionSpriteSelection_BoundaryValues(t *testing.T) {
 	tests := []struct {
 		progress float64
-		wantTo   float64
+		wantOld  bool
 	}{
-		{-0.5, 0.0},  // 負 → 0
-		{0.0, 0.0},   // 境界
-		{0.5, 0.5},   // 中点 (easing でも 0.5)
-		{1.0, 1.0},   // 境界
-		{1.5, 1.0},   // 超過 → 1.0
+		{0.0, true},   // 開始直後 → 旧セル
+		{0.25, true},  // 前半 → 旧セル
+		{0.49, true},  // 境界直前 → 旧セル
+		{0.50, false}, // 中間点 → 新セル
+		{0.75, false}, // 後半 → 新セル
+		{1.0, false},  // 完了 → 新セル
 	}
 	for _, tt := range tests {
-		fromAlpha, toAlpha := transitionAlphas(tt.progress)
-		if fromAlpha != 1.0 {
-			t.Errorf("progress=%v: fromAlpha=%v, want 1.0", tt.progress, fromAlpha)
-		}
-		if toAlpha != tt.wantTo {
-			t.Errorf("progress=%v: toAlpha=%v, want %v", tt.progress, toAlpha, tt.wantTo)
+		got := transitionSpriteSelection(tt.progress)
+		if got != tt.wantOld {
+			t.Errorf("transitionSpriteSelection(%v) = %v (showOld), want %v", tt.progress, got, tt.wantOld)
 		}
 	}
 }
 
-func TestTransitionAlphas_MidpointNotSemitransparent(t *testing.T) {
-	// 遷移中間点 (progress=0.5) でキャラが半透明にならないことを確認。
-	// from=1.0 + to=easing(0.5)=0.5 → from が全面を覆い、to が上に重なる。
-	// from=1.0 を維持するため、合計 alpha が 1.0 を下回ることはない。
-	fromAlpha, toAlpha := transitionAlphas(0.5)
-	if fromAlpha < 1.0 {
-		t.Errorf("midpoint: fromAlpha=%v, want 1.0 (character must stay opaque)", fromAlpha)
-	}
-	if toAlpha != 0.5 {
-		t.Errorf("midpoint: toAlpha=%v, want 0.5 (easeInOutCubic(0.5)=0.5)", toAlpha)
+func TestTransitionWarp_ZeroProgress(t *testing.T) {
+	// progress=0 → warp は 0 (まだ変形しない)
+	warpX, warpY := transitionWarp(0, 0, 0, 1, 0.0, 1280, 720)
+	if warpX != 0 || warpY != 0 {
+		t.Errorf("progress=0: warp=(%v,%v), want (0,0)", warpX, warpY)
 	}
 }
 
-// ─── Phase 4.5: easing 統合テスト ─────────────────────────────────────────
-
-func TestTransitionAlphas_Eased_AlphaRange(t *testing.T) {
-	// 0.0〜1.0 の全 progress で transitionAlphas の出力が [0,1] 範囲内であることを確認。
-	for i := 0; i <= 100; i++ {
-		p := float64(i) / 100.0
-		fromAlpha, toAlpha := transitionAlphas(p)
-		if fromAlpha < 0 || fromAlpha > 1 {
-			t.Errorf("progress=%v: fromAlpha=%v out of [0,1]", p, fromAlpha)
-		}
-		if toAlpha < 0 || toAlpha > 1 {
-			t.Errorf("progress=%v: toAlpha=%v out of [0,1]", p, toAlpha)
-		}
+func TestTransitionWarp_CompleteProgress(t *testing.T) {
+	// progress=1.0 → warp は 0 (遷移完了後、静止画に収束)
+	warpX, warpY := transitionWarp(0, 0, 0, 1, 1.0, 1280, 720)
+	if warpX != 0 || warpY != 0 {
+		t.Errorf("progress=1.0: warp=(%v,%v), want (0,0)", warpX, warpY)
 	}
 }
 
-func TestTransitionAlphas_Eased_SlowerStart(t *testing.T) {
-	// easing により前半は linear より遅く、後半は linear より速くなることを確認。
-	// progress=0.25 のとき、linear なら toAlpha=0.25、easing なら 0.0625 (遅い)
-	_, toAlphaEarly := transitionAlphas(0.25)
-	if toAlphaEarly >= 0.25 {
-		t.Errorf("early phase: toAlpha=%v, want < 0.25 (ease-in region should be slower)", toAlphaEarly)
+func TestTransitionWarp_ProportionalToCellDiff(t *testing.T) {
+	// セル差分が大きいほど warp が大きい
+	screenW, screenH := 1280.0, 720.0
+	progress := 0.25 // 前半、warpFactor > 0
+
+	smallWarpX, _ := transitionWarp(0, 0, 0, 1, progress, screenW, screenH) // dCol=1
+	largeWarpX, _ := transitionWarp(0, 0, 0, 3, progress, screenW, screenH) // dCol=3
+
+	if largeWarpX <= smallWarpX {
+		t.Errorf("larger cell diff should produce larger warp: small=%v, large=%v", smallWarpX, largeWarpX)
 	}
-	// progress=0.75 のとき、linear なら toAlpha=0.75、easing なら 0.9375 (速い)
-	_, toAlphaLate := transitionAlphas(0.75)
-	if toAlphaLate <= 0.75 {
-		t.Errorf("late phase: toAlpha=%v, want > 0.75 (ease-out region should be faster)", toAlphaLate)
+}
+
+func TestTransitionWarp_Direction_OldSprite(t *testing.T) {
+	// 前半 (progress < 0.5): 旧セルから新セル方向へ warp
+	// from=r0c0, to=r0c1 → dCol=+1 → warpX は正 (右方向)
+	screenW, screenH := 1280.0, 720.0
+	warpX, _ := transitionWarp(0, 0, 0, 1, 0.25, screenW, screenH)
+	if warpX <= 0 {
+		t.Errorf("old sprite warpX=%v, want > 0 (toward new cell right)", warpX)
+	}
+}
+
+func TestTransitionWarp_Direction_NewSprite(t *testing.T) {
+	// 後半 (progress >= 0.5): 逆向き warp (settling back)
+	// from=r0c0, to=r0c1 → dCol=+1 → warpX は負 (逆方向)
+	screenW, screenH := 1280.0, 720.0
+	warpX, _ := transitionWarp(0, 0, 0, 1, 0.75, screenW, screenH)
+	if warpX >= 0 {
+		t.Errorf("new sprite warpX=%v, want < 0 (reverse direction settling)", warpX)
+	}
+}
+
+func TestTransitionWarp_SymmetricMagnitude(t *testing.T) {
+	// progress=0.25 と progress=0.75 で warp の絶対値が等しいことを確認
+	// (easeInOutCubic の対称性: ease(p) + ease(1-p) = 1 だが、
+	//  warpFactor は progress*2 と (1-progress)*2 で対称)
+	screenW, screenH := 1280.0, 720.0
+	wEarlyX, _ := transitionWarp(0, 0, 0, 3, 0.25, screenW, screenH)
+	wLateX, _ := transitionWarp(0, 0, 0, 3, 0.75, screenW, screenH)
+
+	// 0.25 は progress*2=0.5 → easeInOutCubic(0.5)=0.5
+	// 0.75 は (1-0.75)*2=0.5 → easeInOutCubic(0.5)=0.5
+	// warpFactor が同じなので、絶対値も等しい
+	if math.Abs(math.Abs(wEarlyX)-math.Abs(wLateX)) > 0.01 {
+		t.Errorf("symmetry: early=%v, late=%v, want equal magnitude", wEarlyX, wLateX)
+	}
+}
+
+func TestTransitionWarp_MaxWarpAtMidpoint(t *testing.T) {
+	// progress=0.5 付近で warp factor が最大になることを確認
+	screenW, screenH := 1280.0, 720.0
+
+	// progress=0.49: warpFactor = easeInOutCubic(0.98) ≈ 0.994
+	_, w49 := transitionWarp(0, 0, 0, 2, 0.49, screenW, screenH)
+	// progress=0.50: warpFactor = easeInOutCubic(1.0) = 1.0 (but reversed)
+	_, w50 := transitionWarp(0, 0, 0, 2, 0.50, screenW, screenH)
+
+	// 絶対値で比較: 0.49 と 0.50 はほぼ同じ magnitude
+	if math.Abs(math.Abs(w49)-math.Abs(w50)) > 1.0 {
+		t.Errorf("midpoint warp magnitude: 0.49=%v, 0.50=%v, should be close", w49, w50)
 	}
 }

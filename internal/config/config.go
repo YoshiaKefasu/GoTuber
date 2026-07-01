@@ -83,10 +83,10 @@ type TweaksConfig struct {
 	// Phase 4.3: Morph Renderer 設定
 	// MorphEnabled: depth-weighted elastic morph 有効化。*bool で nil と false を区別。
 	MorphEnabled *bool `toml:"morph_enabled"`
-	// MorphStrength: 最大変位量 (ピクセル)。0.0..16.0。
+	// MorphStrength: 最大変位量 (ピクセル)。0.0..8.0。
 	// 0.0 は有効なユーザー設定なので *float64 で nil (キー欠落) と区別する。
 	MorphStrength *float64 `toml:"morph_strength"`
-	// TransitionDuration: セル切り替え α ブレンド期間 (ms)。50..200。ゼロ値は skip。
+	// TransitionDuration: セル切り替え transition 期間 (ms)。50..250。ゼロ値は skip。
 	TransitionDuration float64 `toml:"transition_duration"`
 }
 
